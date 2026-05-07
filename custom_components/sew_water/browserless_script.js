@@ -1,23 +1,24 @@
 /**
- * South East Water - Browserless Puppeteer script
+ * Water Portal - Browserless Puppeteer script
+ *
+ * Supports South East Water and Yarra Valley Water (both Salesforce Experience
+ * Cloud / Aura portals sharing the same architecture).
  *
  * This script is executed inside Browserless Chrome via the /function endpoint.
  *
  * Flow:
- *   1. Log into the SEW portal (Salesforce Experience Cloud).
+ *   1. Log into the portal (Salesforce Experience Cloud).
  *   2. Navigate to /s/usage so the Aura framework initialises fully.
- *   3. Extract the Aura token (auraToken) and framework UID (fwuid) from the
- *      page's JS context – both are required to authenticate Aura API calls.
- *   4. If billingAccountId / meterId were not supplied, discover them from
- *      LSSIndex entries in localStorage written by the SEW LWC components.
- *   5. For each date in startDate..endDate POST to the Salesforce Aura endpoint
- *      using the exact URL-encoded body expected by
- *      MysewUsageBillingGraphController.getUsageData.
- *   6. Return all usage records as a structured JSON object.
+ *   3. Extract auraToken and fwuid from the page's JS context.
+ *   4. Discover billingAccountId and meterId from localStorage if not supplied.
+ *   5. Build a SINGLE batched Aura request containing one action per day in
+ *      the requested date range and POST it once to the Aura endpoint.
+ *   6. Unpack the per-action responses and return structured JSON.
  *
  * Context variables (supplied via the Browserless `context` field):
- *   username          {string}  SEW login email
- *   password          {string}  SEW login password
+ *   username          {string}  Portal login email
+ *   password          {string}  Portal login password
+ *   portal            {string}  "sew" | "yvw"  (default: "sew")
  *   billingAccountId  {string}  (optional) cached billing account ID
  *   meterId           {string}  (optional) cached meter ID
  *   startDate         {string}  ISO date "YYYY-MM-DD"
@@ -25,63 +26,23 @@
  */
 
 // ---------------------------------------------------------------------------
-// Helper: build the URL-encoded Aura request body for getUsageData.
-//
-// This exactly mirrors the req_body function from the original pyscript
-// implementation.  The portal's backend is a Salesforce Aura endpoint that
-// expects application/x-www-form-urlencoded with three fields:
-//   message      – JSON-encoded Aura actions descriptor
-//   aura.context – JSON-encoded Aura framework context (must include fwuid)
-//   aura.pageURI – the page path the request originates from
-//   aura.token   – the user's Aura session token
+// Portal configuration map
+// Both portals are Salesforce Experience Cloud with identical Aura structure;
+// only the base URL, Apex class name, and fallback fwuid differ.
 // ---------------------------------------------------------------------------
-const buildAuraRequestBody = (dateFor, meterSerial, accountNum, auraToken, fwuid) => {
-  // Fixed production value for the "loaded" APPLICATION hash.
-  // This is baked into the portal's JS bundle; update if the portal is redeployed.
-  const LOADED_APP_HASH = "1422_wotCJi-4iLy4EgTPC6RQ4g";
-
-  const messageObj = {
-    actions: [
-      {
-        id: "1084;a",
-        descriptor: "aura://ApexActionController/ACTION$execute",
-        callingDescriptor: "UNKNOWN",
-        params: {
-          namespace: "",
-          classname: "MysewUsageBillingGraphController",
-          method: "getUsageData",
-          params: {
-            baId:       accountNum,
-            meterId:    meterSerial,
-            dateFrom:   dateFor,
-            dateTo:     dateFor,
-            resolution: "hourly",
-          },
-          cacheable:      false,
-          isContinuation: false,
-        },
-      },
-    ],
-  };
-
-  const contextObj = {
-    mode:   "PROD",
-    fwuid:  fwuid,
-    app:    "siteforce:communityApp",
-    loaded: {
-      [`APPLICATION@markup://siteforce:communityApp`]: LOADED_APP_HASH,
-    },
-    dn:      [],
-    globals: { srcdoc: true },
-    uad:     true,
-  };
-
-  return (
-    "message="        + encodeURIComponent(JSON.stringify(messageObj)) +
-    "&aura.context="  + encodeURIComponent(JSON.stringify(contextObj)) +
-    "&aura.pageURI="  + encodeURIComponent("/s/usage") +
-    "&aura.token="    + encodeURIComponent(auraToken)
-  );
+const PORTALS = {
+  sew: {
+    baseUrl:       "https://my.southeastwater.com.au",
+    apexClassname: "MysewUsageBillingGraphController",
+    fallbackFwuid: "REdtNUF5ejJUNWxpdVllUjQtUzV4UTFLcUUxeUY3ZVB6dE9hR0VheDVpb2cxMy4zMzU1NDQzMi41MDMzMTY0OA",
+    loadedAppHash: "1422_wotCJi-4iLy4EgTPC6RQ4g",
+  },
+  yvw: {
+    baseUrl:       "https://my.yvw.com.au",
+    apexClassname: "MyyvwUsageBillingGraphController",
+    fallbackFwuid: "",   // extracted at runtime; no known fallback yet
+    loadedAppHash: "",   // extracted at runtime
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -98,25 +59,76 @@ const dateRange = (startDateStr, endDateStr) => {
 };
 
 // ---------------------------------------------------------------------------
+// Helper: build a single batched Aura request body.
+//
+// The Aura framework supports multiple actions in one POST – each action gets
+// its own entry in the `actions` array with a unique id.  The server returns
+// an `actions` array in the same order so we can correlate by index or id.
+//
+// This exactly mirrors the req_body function from the original pyscript
+// implementation, extended to cover multiple dates in one call.
+// ---------------------------------------------------------------------------
+const buildBatchedAuraBody = (dates, meterSerial, accountNum, auraToken, fwuid, apexClassname, loadedAppHash) => {
+  const contextObj = {
+    mode:   "PROD",
+    fwuid:  fwuid,
+    app:    "siteforce:communityApp",
+    loaded: loadedAppHash
+      ? { [`APPLICATION@markup://siteforce:communityApp`]: loadedAppHash }
+      : {},
+    dn:      [],
+    globals: { srcdoc: true },
+    uad:     true,
+  };
+
+  const actions = dates.map((dateFor, idx) => ({
+    // Use incrementing IDs in the same format the portal uses: "1084;a", "1085;a" …
+    id:                `${1084 + idx};a`,
+    descriptor:        "aura://ApexActionController/ACTION$execute",
+    callingDescriptor: "UNKNOWN",
+    params: {
+      namespace:      "",
+      classname:      apexClassname,
+      method:         "getUsageData",
+      params: {
+        baId:       accountNum,
+        meterId:    meterSerial,
+        dateFrom:   dateFor,
+        dateTo:     dateFor,
+        resolution: "hourly",
+      },
+      cacheable:      false,
+      isContinuation: false,
+    },
+  }));
+
+  const messageObj = { actions };
+
+  return (
+    "message="       + encodeURIComponent(JSON.stringify(messageObj)) +
+    "&aura.context=" + encodeURIComponent(JSON.stringify(contextObj)) +
+    "&aura.pageURI=" + encodeURIComponent("/s/usage") +
+    "&aura.token="   + encodeURIComponent(auraToken)
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 export default async ({ page, context }) => {
   const {
     username,
     password,
-    billingAccountId: suppliedAccountId,
-    meterId: suppliedMeterId,
+    portal:              portalKey = "sew",
+    billingAccountId:    suppliedAccountId = "",
+    meterId:             suppliedMeterId   = "",
     startDate,
     endDate,
   } = context;
 
-  const BASE_URL = "https://my.southeastwater.com.au";
-  const AURA_URL = `${BASE_URL}/s/sfsites/aura`;
-
-  // Fallback fwuid – the known production value embedded in the portal JS bundle.
-  // Used only when $A.getContext() and DOM scanning both fail.
-  const FALLBACK_FWUID =
-    "REdtNUF5ejJUNWxpdVllUjQtUzV4UTFLcUUxeUY3ZVB6dE9hR0VheDVpb2cxMy4zMzU1NDQzMi41MDMzMTY0OA";
+  const portalCfg = PORTALS[portalKey] || PORTALS["sew"];
+  const BASE_URL  = portalCfg.baseUrl;
+  const AURA_URL  = `${BASE_URL}/s/sfsites/aura`;
 
   // -------------------------------------------------------------------------
   // 1. Log in
@@ -145,32 +157,37 @@ export default async ({ page, context }) => {
   ]);
 
   // -------------------------------------------------------------------------
-  // 2. Navigate to /s/usage so the Aura framework and LWC components boot,
-  //    which also populates localStorage with account / meter data.
+  // 2. Navigate to /s/usage so Aura and LWC components fully initialise,
+  //    which also causes the portal to write account data to localStorage.
   // -------------------------------------------------------------------------
   await page.goto(`${BASE_URL}/s/usage`, { waitUntil: "networkidle2", timeout: 60000 });
-
-  // Allow extra time for async LWC initialisation
   await page.waitForTimeout(6000);
 
   // -------------------------------------------------------------------------
-  // 3. Extract auraToken and fwuid
+  // 3. Extract auraToken, fwuid, and loadedAppHash
   //
   //    Priority:
   //      a) $A.getContext() – the canonical Aura JS API
-  //      b) Inline <script> scanning for embedded JSON blobs
-  //      c) Performance resource URL scanning (if a previous Aura call was made)
+  //      b) Inline <script> tag scanning for embedded JSON blobs
+  //      c) Performance resource URL scanning (prior Aura calls leave traces)
   // -------------------------------------------------------------------------
   const auraInfo = await page.evaluate(() => {
-    let auraToken = null;
-    let fwuid     = null;
+    let auraToken    = null;
+    let fwuid        = null;
+    let loadedAppHash = null;
 
     // (a) Aura JS API
     try {
       if (typeof $A !== "undefined" && $A.getContext) {
         const ctx = $A.getContext();
-        if (ctx.getToken) auraToken = ctx.getToken();
-        if (ctx.getFwuid) fwuid     = ctx.getFwuid();
+        if (ctx.getToken)  auraToken    = ctx.getToken();
+        if (ctx.getFwuid)  fwuid        = ctx.getFwuid();
+        // Try to pull loadedAppHash from the loaded map
+        if (ctx.getLoaded) {
+          const loaded = ctx.getLoaded();
+          const appKey = Object.keys(loaded || {}).find(k => k.startsWith("APPLICATION@"));
+          if (appKey) loadedAppHash = loaded[appKey];
+        }
       }
     } catch (_) {}
 
@@ -186,7 +203,11 @@ export default async ({ page, context }) => {
           const m = src.match(/"fwuid"\s*:\s*"([^"]{10,})"/);
           if (m) fwuid = m[1];
         }
-        if (auraToken && fwuid) break;
+        if (!loadedAppHash) {
+          const m = src.match(/"APPLICATION@markup:\/\/siteforce:communityApp"\s*:\s*"([^"]+)"/);
+          if (m) loadedAppHash = m[1];
+        }
+        if (auraToken && fwuid && loadedAppHash) break;
       }
     }
 
@@ -195,52 +216,51 @@ export default async ({ page, context }) => {
       for (const e of performance.getEntriesByType("resource")) {
         if (e.name.includes("aura.token=")) {
           const m = e.name.match(/aura\.token=([^&]+)/);
-          if (m) { auraToken = decodeURIComponent(m[1]); break; }
+          if (m) { auraToken = decodeURIComponent(m[1]); }
         }
-        if (e.name.includes("aura.context=") && !fwuid) {
+        if (e.name.includes("aura.context=") && (!fwuid || !loadedAppHash)) {
           const m = e.name.match(/aura\.context=([^&]+)/);
           if (m) {
             try {
               const ctx = JSON.parse(decodeURIComponent(m[1]));
-              if (ctx.fwuid) fwuid = ctx.fwuid;
+              if (ctx.fwuid && !fwuid) fwuid = ctx.fwuid;
+              if (ctx.loaded && !loadedAppHash) {
+                const appKey = Object.keys(ctx.loaded).find(k => k.startsWith("APPLICATION@"));
+                if (appKey) loadedAppHash = ctx.loaded[appKey];
+              }
             } catch (_) {}
           }
         }
+        if (auraToken && fwuid && loadedAppHash) break;
       }
     }
 
-    return { auraToken, fwuid };
+    return { auraToken, fwuid, loadedAppHash };
   });
 
-  const fwuid     = auraInfo.fwuid     || FALLBACK_FWUID;
-  const auraToken = auraInfo.auraToken;
+  const fwuid        = auraInfo.fwuid        || portalCfg.fallbackFwuid;
+  const loadedAppHash = auraInfo.loadedAppHash || portalCfg.loadedAppHash;
+  const auraToken    = auraInfo.auraToken;
 
   if (!auraToken) {
     return {
-      error:
-        "Could not extract Aura token from page. " +
-        "Ensure login succeeded and the /s/usage page loaded correctly.",
+      error: "Could not extract Aura token from page. Ensure login succeeded and the /s/usage page loaded correctly.",
     };
   }
 
   // -------------------------------------------------------------------------
   // 4. Discover billingAccountId and meterId from localStorage if not supplied
   // -------------------------------------------------------------------------
-  let billingAccountId = suppliedAccountId || "";
-  let meterId          = suppliedMeterId   || "";
+  let billingAccountId = suppliedAccountId;
+  let meterId          = suppliedMeterId;
 
   if (!billingAccountId || !meterId) {
     const discovered = await page.evaluate(() => {
       let baId = null;
       let mId  = null;
-
       for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        const val = localStorage.getItem(key);
+        const val = localStorage.getItem(localStorage.key(i));
         if (!val) continue;
-
-        // Scan every localStorage value for the patterns we need.
-        // SEW stores data under LSSIndex:LOCAL{"namespace":"c"} style keys.
         if (!baId) {
           const m = val.match(/"(?:baId|billingAccountId)"\s*:\s*"([^"]+)"/);
           if (m) baId = m[1];
@@ -268,27 +288,38 @@ export default async ({ page, context }) => {
   }
 
   // -------------------------------------------------------------------------
-  // 5. Fetch usage data for each date in the requested range
+  // 5. Build and POST a single batched Aura request for all dates at once.
   //
-  //    We POST the Aura request body to /s/sfsites/aura for each individual
-  //    day (matching the original pyscript behaviour: one request per date).
-  //    The Aura response wraps the return value inside:
-  //      response.actions[0].returnValue
+  //    Aura supports multiple actions[] entries in one POST – we include one
+  //    action per day.  The response actions[] is returned in the same order,
+  //    so we zip dates ↔ actions by index.
+  //
+  //    For very large ranges (>60 days) we split into chunks of 60 to keep
+  //    individual request bodies manageable and avoid Aura server timeouts.
   // -------------------------------------------------------------------------
-  const dates   = dateRange(startDate, endDate);
-  const records = [];
+  const CHUNK_SIZE = 60;
+  const allDates   = dateRange(startDate, endDate);
+  const records    = [];
 
-  for (const dateFor of dates) {
-    const requestBody = buildAuraRequestBody(
-      dateFor,
+  // Chunk the dates
+  const chunks = [];
+  for (let i = 0; i < allDates.length; i += CHUNK_SIZE) {
+    chunks.push(allDates.slice(i, i + CHUNK_SIZE));
+  }
+
+  for (const chunkDates of chunks) {
+    const requestBody = buildBatchedAuraBody(
+      chunkDates,
       meterId,
       billingAccountId,
       auraToken,
-      fwuid
+      fwuid,
+      portalCfg.apexClassname,
+      loadedAppHash
     );
 
-    const result = await page.evaluate(
-      async (auraUrl, body, dateFor) => {
+    const chunkResults = await page.evaluate(
+      async (auraUrl, body, dates) => {
         try {
           const resp = await fetch(auraUrl, {
             method:  "POST",
@@ -297,52 +328,53 @@ export default async ({ page, context }) => {
           });
 
           if (!resp.ok) {
-            return { error: `HTTP ${resp.status} ${resp.statusText}`, date: dateFor };
+            // Return an error entry for every date in this chunk
+            return dates.map(d => ({ date: d, error: `HTTP ${resp.status} ${resp.statusText}` }));
           }
 
           const json = await resp.json();
 
-          // Validate the Aura response envelope
-          if (!json.actions || !Array.isArray(json.actions) || json.actions.length === 0) {
-            return { error: "Unexpected Aura response shape", raw: JSON.stringify(json).slice(0, 200), date: dateFor };
+          if (!json.actions || !Array.isArray(json.actions)) {
+            return dates.map(d => ({
+              date: d,
+              error: "Unexpected Aura response shape: " + JSON.stringify(json).slice(0, 150),
+            }));
           }
 
-          const action = json.actions[0];
-
-          if (action.state !== "SUCCESS") {
-            return {
-              error:  `Aura action state: ${action.state}`,
-              errors: action.error,
-              date:   dateFor,
-            };
-          }
-
-          return { date: dateFor, data: action.returnValue };
+          // Zip response actions with the dates we requested (same order guaranteed)
+          return json.actions.map((action, idx) => {
+            const dateFor = dates[idx] || "unknown";
+            if (action.state !== "SUCCESS") {
+              return {
+                date:   dateFor,
+                error:  `Aura action state: ${action.state}`,
+                errors: action.error,
+              };
+            }
+            return { date: dateFor, data: action.returnValue };
+          });
         } catch (e) {
-          return { error: e.message, date: dateFor };
+          return dates.map(d => ({ date: d, error: e.message }));
         }
       },
       AURA_URL,
       requestBody,
-      dateFor
+      chunkDates
     );
 
-    if (result.error) {
-      // Log but don't abort – continue with remaining dates
-      console.warn(`SEW: error for ${dateFor}: ${result.error}`);
-      records.push({ date: dateFor, error: result.error });
-    } else {
-      records.push(result);
+    for (const r of chunkResults) {
+      if (r.error) {
+        console.warn(`Water portal: error for ${r.date}: ${r.error}`);
+      }
+      records.push(r);
     }
-
-    // Brief pause between requests to avoid overwhelming the portal
-    await page.waitForTimeout(500);
   }
 
   // -------------------------------------------------------------------------
   // 6. Return structured result
   // -------------------------------------------------------------------------
   return {
+    portal: portalKey,
     billingAccountId,
     meterId,
     startDate,
