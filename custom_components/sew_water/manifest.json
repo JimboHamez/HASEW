@@ -1,0 +1,13 @@
+{
+  "domain": "sew_water",
+  "name": "South East Water",
+  "version": "1.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/BJReplay/ha-sew-water",
+  "issue_tracker": "https://github.com/BJReplay/ha-sew-water/issues",
+  "dependencies": [],
+  "codeowners": ["@BJReplay"],
+  "requirements": [],
+  "iot_class": "cloud_polling",
+  "homeassistant": "2023.1.0"
+}

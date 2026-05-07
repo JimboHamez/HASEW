@@ -1,0 +1,19 @@
+import_from_date:
+  name: Import water usage from date
+  description: >
+    Trigger a backfill import of water usage data from the South East Water portal,
+    starting from the supplied date up to yesterday.
+  fields:
+    start_date:
+      name: Start date
+      description: "Earliest date to import from (format: YYYY-MM-DD)"
+      required: true
+      example: "2024-01-01"
+      selector:
+        text:
+
+force_import:
+  name: Force import water usage
+  description: >
+    Immediately trigger a refresh of water usage data without waiting for the
+    next scheduled polling interval.
