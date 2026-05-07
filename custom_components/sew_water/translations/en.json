@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "South East Water",
+        "description": "Connect to your South East Water account via a Browserless Chrome instance.\n\nVerify your Browserless instance is running at the URL you provide before continuing.\n\nBilling Account ID and Meter ID are optional – they will be discovered automatically on first run if left blank.",
+        "data": {
+          "username": "SEW Login Email",
+          "password": "SEW Login Password",
+          "browserless_url": "Browserless URL (e.g. http://192.168.1.125:3000)",
+          "browserless_token": "Browserless Token (leave blank if none configured)",
+          "billing_account_id": "Billing Account ID (optional)",
+          "meter_id": "Meter ID (optional)",
+          "scan_interval": "Polling interval (minutes)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect_browserless": "Unable to reach the Browserless instance. Check the URL and ensure the service is running.",
+      "invalid_auth": "Authentication failed. Check your SEW email and password.",
+      "unknown": "Unexpected error. Check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "South East Water account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "South East Water Options",
+        "data": {
+          "scan_interval": "Polling interval (minutes)",
+          "billing_account_id": "Billing Account ID (override)",
+          "meter_id": "Meter ID (override)",
+          "browserless_token": "Browserless Token"
+        }
+      }
+    }
+  },
+  "services": {
+    "import_from_date": {
+      "name": "Import water usage from date",
+      "description": "Trigger a backfill import of water usage data starting from the supplied date.",
+      "fields": {
+        "start_date": {
+          "name": "Start date",
+          "description": "The earliest date (YYYY-MM-DD) to import data from."
+        }
+      }
+    },
+    "force_import": {
+      "name": "Force import water usage",
+      "description": "Immediately trigger a water usage data refresh."
+    }
+  }
+}
