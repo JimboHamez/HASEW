@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import date, datetime
@@ -21,6 +22,27 @@ _LOGGER = logging.getLogger(__name__)
 
 # Path to the Puppeteer JS script bundled with this integration
 _SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "browserless_script.js")
+
+# Script contents, read once per process (lazily, off the event loop)
+_JS_SCRIPT: str | None = None
+_JS_SCRIPT_LOCK = asyncio.Lock()
+
+
+def _read_script() -> str:
+    with open(_SCRIPT_PATH, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+async def _async_get_script() -> str:
+    """Return the Puppeteer script, loading it in an executor on first use."""
+    global _JS_SCRIPT  # noqa: PLW0603
+    if _JS_SCRIPT is None:
+        async with _JS_SCRIPT_LOCK:
+            if _JS_SCRIPT is None:
+                _JS_SCRIPT = await asyncio.get_running_loop().run_in_executor(
+                    None, _read_script
+                )
+    return _JS_SCRIPT
 
 # Browserless timeout: base 90 s + 2 s per day requested (batch call is one
 # round-trip but the page still has to log in and navigate first).
@@ -54,10 +76,6 @@ class SEWBrowserlessClient:
         self._portal             = portal if portal in PORTAL_OPTIONS else DEFAULT_PORTAL
         self._billing_account_id = billing_account_id
         self._meter_id           = meter_id
-
-        # Load the JS script once at construction time
-        with open(_SCRIPT_PATH, "r", encoding="utf-8") as fh:
-            self._js_script = fh.read()
 
     # ------------------------------------------------------------------
     # Public API
@@ -137,7 +155,7 @@ class SEWBrowserlessClient:
         timeout_secs = _BASE_TIMEOUT_SECS + (_SECS_PER_DAY * num_days)
 
         payload = {
-            "code": self._js_script,
+            "code": await _async_get_script(),
             "context": {
                 "username":         self._username,
                 "password":         self._password,
