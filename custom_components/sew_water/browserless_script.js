@@ -153,7 +153,7 @@ export default async ({ page, context }) => {
 
   await Promise.all([
     page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 }),
-    page.click('button[type="submit"], input[type="submit"], button[id*="login"]'),
+    page.click('button[name="login"], button[type="submit"], input[type="submit"], button[id*="login"]'),
   ]);
 
   // -------------------------------------------------------------------------
