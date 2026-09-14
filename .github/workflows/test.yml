@@ -1,0 +1,60 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Jobs only check out the repo and install from PyPI; none writes back to it.
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_test.txt
+      - name: Run tests
+        # The client tests are offline (aioresponses) and need no Home Assistant install.
+        run: pytest -q
+
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install -r requirements_test.txt
+      - name: Format check
+        run: ruff format --check custom_components tests
+      - name: Lint
+        run: ruff check custom_components tests
+
+  mypy:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        # Home Assistant is installed so mypy can resolve the framework imports.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_test.txt
+          pip install "homeassistant>=2025.8" mypy
+      - name: Type check (component only)
+        # Strict config lives in pyproject.toml [tool.mypy]; scoped to the integration package.
+        run: mypy custom_components/sew_water
