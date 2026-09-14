@@ -1,105 +1,94 @@
-"""Water Portal integration for Home Assistant (South East Water / Yarra Valley Water)."""
+"""South East Water integration: daily water usage from the customer portal."""
 
 from __future__ import annotations
 
+from datetime import date
 import logging
-from datetime import date, timedelta
 
+import aiohttp
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.typing import ConfigType
+import voluptuous as vol
 
-from .browserless_client import SEWBrowserlessClient
 from .const import (
-    CONF_BILLING_ACCOUNT_ID,
-    CONF_BROWSERLESS_TOKEN,
-    CONF_BROWSERLESS_URL,
-    CONF_METER_ID,
-    CONF_PORTAL,
-    CONF_SCAN_INTERVAL,
-    COORDINATOR,
-    DEFAULT_PORTAL,
-    DEFAULT_SCAN_INTERVAL,
+    CONF_COOKIES,
     DOMAIN,
-    PORTAL_OPTIONS,
+    SERVICE_ATTR_START_DATE,
+    SERVICE_FORCE_IMPORT,
+    SERVICE_IMPORT_FROM_DATE,
 )
-from .coordinator import WaterPortalCoordinator
+from .coordinator import SewConfigEntry, SewCoordinator
+from .sew_client import SewClient
 
 _LOGGER = logging.getLogger(__name__)
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.SENSOR]
 
-SERVICE_IMPORT_FROM_DATE = "import_from_date"
-SERVICE_FORCE_IMPORT     = "force_import"
+IMPORT_FROM_DATE_SCHEMA = vol.Schema({vol.Required(SERVICE_ATTR_START_DATE): cv.date})
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Water Portal from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the integration-wide services."""
 
-    data   = {**entry.data, **entry.options}
-    portal = data.get(CONF_PORTAL, DEFAULT_PORTAL)
+    def _coordinators() -> list[SewCoordinator]:
+        return [entry.runtime_data for entry in hass.config_entries.async_loaded_entries(DOMAIN)]
 
-    session = async_get_clientsession(hass)
-    client  = SEWBrowserlessClient(
-        session            = session,
-        browserless_url    = data[CONF_BROWSERLESS_URL],
-        browserless_token  = data.get(CONF_BROWSERLESS_TOKEN, ""),
-        username           = data[CONF_USERNAME],
-        password           = data[CONF_PASSWORD],
-        portal             = portal,
-        billing_account_id = data.get(CONF_BILLING_ACCOUNT_ID, ""),
-        meter_id           = data.get(CONF_METER_ID, ""),
-    )
+    async def _force_import(call: ServiceCall) -> None:
+        coordinators = _coordinators()
+        if not coordinators:
+            raise ServiceValidationError(translation_domain=DOMAIN, translation_key="no_entries")
+        for coordinator in coordinators:
+            await coordinator.async_refresh()
 
-    scan_interval = timedelta(
-        minutes=int(data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
-    )
+    async def _import_from_date(call: ServiceCall) -> None:
+        coordinators = _coordinators()
+        if not coordinators:
+            raise ServiceValidationError(translation_domain=DOMAIN, translation_key="no_entries")
+        start: date = call.data[SERVICE_ATTR_START_DATE]
+        for coordinator in coordinators:
+            try:
+                await coordinator.async_import_from(start)
+            except ValueError as err:
+                raise ServiceValidationError(translation_domain=DOMAIN, translation_key="start_in_future") from err
+            except HomeAssistantError as err:
+                raise HomeAssistantError(f"Import failed: {err}") from err
 
-    coordinator = WaterPortalCoordinator(hass, client, scan_interval)
-    await coordinator.async_config_entry_first_refresh()
-
-    hass.data[DOMAIN][entry.entry_id] = {COORDINATOR: coordinator}
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # ------------------------------------------------------------------
-    # Services
-    # ------------------------------------------------------------------
-    async def handle_import_from_date(call: ServiceCall) -> None:
-        raw = call.data.get("start_date")
-        if not raw:
-            _LOGGER.error("sew_water.import_from_date requires 'start_date'")
-            return
-        try:
-            start = date.fromisoformat(str(raw))
-        except ValueError:
-            _LOGGER.error("Invalid start_date '%s'; expected YYYY-MM-DD", raw)
-            return
-        await coordinator.force_import_from_date(start)
-
-    async def handle_force_import(_call: ServiceCall) -> None:
-        await coordinator.async_refresh()
-
-    if not hass.services.has_service(DOMAIN, SERVICE_IMPORT_FROM_DATE):
-        hass.services.async_register(DOMAIN, SERVICE_IMPORT_FROM_DATE, handle_import_from_date)
-    if not hass.services.has_service(DOMAIN, SERVICE_FORCE_IMPORT):
-        hass.services.async_register(DOMAIN, SERVICE_FORCE_IMPORT, handle_force_import)
-
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    hass.services.async_register(DOMAIN, SERVICE_FORCE_IMPORT, _force_import)
+    hass.services.async_register(DOMAIN, SERVICE_IMPORT_FROM_DATE, _import_from_date, schema=IMPORT_FROM_DATE_SCHEMA)
     return True
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
+async def async_setup_entry(hass: HomeAssistant, entry: SewConfigEntry) -> bool:
+    """Restore the stored portal session and start polling."""
+    session = async_create_clientsession(hass, cookie_jar=aiohttp.CookieJar())
+    client = SewClient(session)
+    client.import_cookies(entry.data.get(CONF_COOKIES, []))
+
+    coordinator = SewCoordinator(hass, entry, client)
+    await coordinator.async_config_entry_first_refresh()
+    entry.runtime_data = coordinator
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: SewConfigEntry) -> bool:
+    """Stop polling and release the HTTP session."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-    if not hass.data.get(DOMAIN):
-        hass.services.async_remove(DOMAIN, SERVICE_IMPORT_FROM_DATE)
-        hass.services.async_remove(DOMAIN, SERVICE_FORCE_IMPORT)
+        await entry.runtime_data.client.session.close()
     return unload_ok
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Refuse to migrate entries from the Browserless-based version; they must be set up again."""
+    if entry.version < 2:
+        _LOGGER.error("Config entries from version 1 cannot be migrated; remove the integration and add it again")
+        return False
+    return True

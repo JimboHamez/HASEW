@@ -1,151 +1,117 @@
-# Water Portal – Home Assistant Custom Component
+# South East Water – Home Assistant integration
 
-A native Home Assistant custom integration supporting:
+Daily mains water usage from the [South East Water](https://my.southeastwater.com.au) customer
+portal, delivered as long-term statistics for the **Energy dashboard** plus a handful of sensors.
 
-| Utility | Portal URL |
-|---|---|
-| **South East Water** | `https://my.southeastwater.com.au` |
-| **Yarra Valley Water** | `https://my.yvw.com.au` |
+The portal is a Salesforce Experience Cloud site. This integration talks to it directly over HTTPS –
+no Browserless, no headless Chrome, no extra add-ons.
 
-Both portals use Salesforce Experience Cloud with the same Aura RPC architecture. The integration logs in via a Browserless Chrome instance, extracts the Aura session token, then makes a **single batched Aura API call** to fetch all requested dates at once – no per-day round-trips.
+## How it works
 
----
-
-## Prerequisites
-
-1. A [Browserless Chrome](https://github.com/browserless/browserless) instance reachable from Home Assistant.
-   - **HA OS / Supervised:** install the [Browserless addon](https://github.com/alexbelgiums/hassio-addons/tree/master/browserless_chrome)
-   - **Docker:** `docker run -p 3000:3000 ghcr.io/browserless/base`
-2. Verify it is running: browse to `http://<host>:3000/config`
-
----
+1. **Setup** – you sign in once with your portal email and password. South East Water requires a
+   one-time code for every new login, so the setup flow asks where to send it (email or SMS) and then
+   asks for the code.
+2. **Session reuse** – the logged-in session cookies are stored in the config entry. Every poll
+   re-uses them, so you are **not** asked for a code again until the portal expires the session.
+   Sessions survive Home Assistant restarts.
+3. **Re-authentication** – when the session finally expires, Home Assistant shows the standard
+   *Reauthentication required* notification. Click it, pick email or SMS, enter the code, done –
+   the stored credentials are re-used, so nothing else to type.
+4. **Polling** – once a day at 02:00 local time (configurable). Each poll re-fetches the **last
+   30 days** and re-imports them, because the portal publishes readings a day or two late and
+   occasionally corrects them. Re-importing is idempotent, so history is filled in and corrected
+   automatically. The first poll imports the last **90 days**.
 
 ## Installation
 
-### Via HACS (recommended)
+### HACS (recommended)
 
-1. HACS → Integrations → ⋮ → Custom repositories
+1. HACS → Integrations → ⋮ → *Custom repositories*
 2. Add `https://github.com/JimboHamez/HASEW` as type **Integration**
-3. Install **Water Portal**
-4. Restart Home Assistant
+3. Install **South East Water** and restart Home Assistant
 
 ### Manual
 
-Copy `custom_components/sew_water/` into your HA `config/custom_components/` directory, then restart.
-
----
+Copy `custom_components/sew_water/` into your `config/custom_components/` directory and restart.
 
 ## Configuration
 
-1. **Settings → Devices & Services → Add Integration → Water Portal**
-2. Fill in the form:
+**Settings → Devices & services → Add integration → South East Water**
 
-| Field | Description |
+| Step | What you enter |
 |---|---|
-| **Water utility** | Choose *South East Water* or *Yarra Valley Water* from the dropdown |
-| **Login email** | Your portal login email |
-| **Login password** | Your portal password |
-| **Browserless URL** | e.g. `http://192.168.1.125:3000` (not `localhost`) |
-| **Browserless token** | Leave blank unless your Browserless instance requires a token |
-| **Billing Account ID** | Optional – discovered automatically from localStorage on first run |
-| **Meter ID** | Optional – discovered automatically from localStorage on first run |
-| **Polling interval** | Minutes between data fetches (default 1440 = once per day) |
+| Sign in | Portal email address and password |
+| Send code by | Email or SMS |
+| One-time code | The 6-digit code the portal sent |
 
-> **Tip:** Both IDs can be found in the browser's **Application → Local Storage** for the portal URL under the `LSSIndex:LOCAL{"namespace":"c"}` key after logging in.
+Billing account and meter are discovered automatically.
 
----
+**Options** (⚙ on the integration): *Poll interval* in minutes. At the default of 1440 the poll is
+pinned to 02:00 local time; any other value is used as a plain interval (minimum 60).
 
-## How batching works
+## Energy dashboard
 
-Previous implementations made one Aura API request per day. This integration builds a **single POST** containing one Aura action per day in the requested range (up to 60 days per chunk). The Salesforce Aura framework processes all actions and returns them in one response envelope, dramatically reducing login overhead for backfill imports.
+Add **`sew_water:water_usage_mains`** as a water source under *Settings → Dashboards → Energy*.
 
-```
-Single Browserless session:
-  login → navigate → extract token
-    └─ POST /s/sfsites/aura  { actions: [ day1, day2, … dayN ] }
-         ↑ one network call covers the full range
-```
+> Use the statistic, not the `Total usage` sensor. The statistic carries one row per day with the
+> correct date, including back-filled and corrected days. The sensor only changes once per poll, so
+> the Energy dashboard would attribute a whole day's usage to the minute the poll ran.
 
-For ranges larger than 60 days the script automatically splits into 60-day chunks, still within the same browser session.
+## Entities
 
----
+One device *South East Water* with:
 
-## Energy Dashboard
+| Entity | Description |
+|---|---|
+| `sensor.south_east_water_daily_usage` | Most recent day's usage (L); attributes hold the reading date and the 24 hourly readings |
+| `sensor.south_east_water_total_usage` | Running total of all imported usage (L), `total_increasing` |
+| `sensor.south_east_water_last_reading_date` | Date of the most recent reading |
+| `sensor.south_east_water_meter_serial` | Meter serial number (diagnostic) |
+| `sensor.south_east_water_billing_account_id` | Portal billing account record ID (diagnostic, disabled by default) |
+| `sensor.south_east_water_meter_id` | Portal meter record ID (diagnostic, disabled by default) |
 
-After the first successful data pull, go to **Settings → Dashboards → Energy** and add:
-
-- `sew_water:water_usage_mains` – Mains water (L)
-- `sew_water:water_usage_recycled` – Recycled water (L)
-
----
+A day whose readings are all zero is treated as "not published yet" for the *daily usage* / *last
+reading date* sensors; it is still imported into statistics as 0 L and corrected on a later poll if
+the portal fills it in.
 
 ## Services
 
-### `sew_water.import_from_date`
-
-Backfill all data from a given date up to yesterday.
+| Service | Description |
+|---|---|
+| `sew_water.force_import` | Poll the portal now |
+| `sew_water.import_from_date` | Import every day from `start_date` up to yesterday (for example, back to when your digital meter was installed) |
 
 ```yaml
 action: sew_water.import_from_date
 data:
-  start_date: "2024-01-01"
+  start_date: "2026-01-01"
 ```
 
-### `sew_water.force_import`
+## Limitations
 
-Immediately trigger a refresh without waiting for the poll interval.
+- **Mains water only.** Some accounts also have a recycled-water meter; this integration does not
+  read it because the author has no such meter to test against. Contributions welcome.
+- **South East Water only.** Yarra Valley Water uses the same Salesforce Experience Cloud / Aura
+  backend, so the client could be adapted, but it has not been tested and is not included.
+- **Credentials are stored in the config entry** (Home Assistant's private `.storage`, the same
+  place every integration keeps its secrets). They are never logged and are redacted from
+  diagnostics. Because the portal demands a one-time code on every login, the stored password alone
+  cannot open a new session – it only saves you retyping it during re-authentication.
+- Upgrading from the 1.x (Browserless) version is not supported in place: remove the old integration
+  entry and add it again. Existing `sew_water:water_usage_mains` statistics are kept.
 
-```yaml
-action: sew_water.force_import
+## Development
+
+```bash
+pip install aiohttp aioresponses pytest pytest-asyncio ruff mypy
+python -m pytest            # offline client tests
+ruff format . && ruff check .
+mypy custom_components/sew_water
 ```
 
----
-
-## Sensors
-
-| Entity | Description |
-|---|---|
-| `sensor.last_mains_water_reading` | Most recent daily mains usage (L) |
-| `sensor.last_recycled_water_reading` | Most recent daily recycled usage (L) |
-| `sensor.last_water_reading_date` | Date of the most recent reading |
-| `sensor.billing_account_id` | Billing account ID (diagnostic) |
-| `sensor.meter_id` | Meter ID (diagnostic) |
-
----
-
-## File structure
-
-```
-custom_components/sew_water/
-├── __init__.py              # Integration setup + service registration
-├── manifest.json            # Integration metadata
-├── config_flow.py           # UI config flow with portal dropdown
-├── coordinator.py           # DataUpdateCoordinator + statistics insertion
-├── sensor.py                # Sensor platform entities
-├── browserless_client.py    # Async Browserless API client
-├── browserless_script.js    # Puppeteer script (batch Aura calls)
-├── const.py                 # Constants + portal definitions
-├── services.yaml            # Service descriptions
-├── strings.json             # UI strings
-└── translations/
-    └── en.json
-```
-
----
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| `cannot_connect_browserless` | Verify Browserless URL is not `localhost`; check `http://<host>:3000/config` |
-| No data after first run | Check HA logs for Browserless script errors; try `sew_water.force_import` |
-| Wrong account/meter | Set Billing Account ID and Meter ID explicitly in integration options |
-| Statistics not in Energy dashboard | Set unit to **Litres** when adding the statistic |
-| Yarra Valley Water not working | The YVW Apex class name may differ; check HA logs for Aura action errors |
-
----
+`custom_components/sew_water/sew_client.py` has no Home Assistant dependencies and documents the
+portal protocol step by step.
 
 ## Credits
 
 Based on the original pyscript implementation by [BJReplay](https://github.com/BJReplay/ha-sew-water).
-

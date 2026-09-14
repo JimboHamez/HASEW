@@ -314,6 +314,11 @@ class SewClient:
         self._token: str | None = None
         self._mfa_form: _MfaForm | None = None
 
+    @property
+    def session(self) -> aiohttp.ClientSession:
+        """The HTTP session whose cookie jar carries the portal login."""
+        return self._session
+
     # ------------------------------------------------------------------ helpers
 
     def _url(self, path: str) -> URL:

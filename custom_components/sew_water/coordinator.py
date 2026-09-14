@@ -1,186 +1,229 @@
-"""DataUpdateCoordinator for the Water Portal integration."""
+"""Data coordinator for the South East Water integration."""
 
 from __future__ import annotations
 
-import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+import logging
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
+    statistics_during_period,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import VolumeConverter
 
-from .browserless_client import BrowserlessError, SEWBrowserlessClient, parse_usage_records
-from .const import DATA_DATE, DATA_MAINS, DATA_RECYCLED, DOMAIN
+from .const import (
+    BACKFILL_DAYS,
+    CONF_BILLING_ACCOUNT_ID,
+    CONF_COOKIES,
+    CONF_METER_ID,
+    CONF_METER_SERIAL,
+    CONF_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    POLL_HOUR,
+    STATISTIC_ID_MAINS,
+    TRAILING_WINDOW_DAYS,
+)
+from .sew_client import (
+    AccountIds,
+    DailyUsage,
+    SewAuthError,
+    SewClient,
+    SewConnectionError,
+    SewProtocolError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-STATISTIC_ID_MAINS    = f"{DOMAIN}:water_usage_mains"
-STATISTIC_ID_RECYCLED = f"{DOMAIN}:water_usage_recycled"
+# How far back to look for the last statistic row preceding a re-import window.
+LOOKBACK_DAYS = 3660
+
+type SewConfigEntry = ConfigEntry[SewCoordinator]
 
 
-class WaterPortalCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Fetch daily water usage and insert into HA long-term statistics."""
+@dataclass(frozen=True)
+class SewData:
+    """State shared with the entities after each poll.
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        client: SEWBrowserlessClient,
-        scan_interval: timedelta,
-    ) -> None:
-        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=scan_interval)
-        self._client = client
+    Attributes:
+        ids: Billing account and meter identifiers.
+        latest: Most recent day with a non-zero reading, if any.
+        total_litres: Running total of every litre imported into statistics.
+        last_poll: When the portal was last read successfully.
+        window: Every day fetched in the last poll, oldest first.
+    """
 
-    @property
-    def client(self) -> SEWBrowserlessClient:
-        return self._client
+    ids: AccountIds
+    latest: DailyUsage | None
+    total_litres: float
+    last_poll: datetime
+    window: tuple[DailyUsage, ...]
 
-    async def force_import_from_date(self, start_date: date) -> None:
-        """Backfill data from start_date up to yesterday."""
-        yesterday = date.today() - timedelta(days=1)
-        if start_date > yesterday:
-            _LOGGER.warning("force_import_from_date: start_date %s is in the future", start_date)
-            return
-        await self._import_range(start_date, yesterday)
 
-    # ------------------------------------------------------------------
-    # DataUpdateCoordinator protocol
-    # ------------------------------------------------------------------
+class SewCoordinator(DataUpdateCoordinator[SewData]):
+    """Poll the portal once a day and keep long-term statistics up to date."""
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        try:
-            start_date = await self._determine_start_date()
-            yesterday  = date.today() - timedelta(days=1)
+    config_entry: SewConfigEntry
 
-            if start_date > yesterday:
-                _LOGGER.debug("No new dates to fetch (start=%s, yesterday=%s)", start_date, yesterday)
-                return self.data or {}
+    def __init__(self, hass: HomeAssistant, entry: SewConfigEntry, client: SewClient) -> None:
+        """Initialise the coordinator.
 
-            records = await self._import_range(start_date, yesterday)
-            return {
-                "last_fetch":         datetime.now().isoformat(),
-                "records_fetched":    len(records),
-                "billing_account_id": self._client.billing_account_id,
-                "meter_id":           self._client.meter_id,
-                "portal":             self._client.portal,
-                "last_date":          records[-1][DATA_DATE].isoformat() if records else None,
-                "last_mains":         records[-1][DATA_MAINS]    if records else None,
-                "last_recycled":      records[-1][DATA_RECYCLED] if records else None,
-            }
-
-        except BrowserlessError as exc:
-            raise UpdateFailed(f"Browserless error: {exc}") from exc
-        except Exception as exc:
-            _LOGGER.exception("Unexpected error during water portal update")
-            raise UpdateFailed(f"Unexpected error: {exc}") from exc
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    async def _determine_start_date(self) -> date:
-        """Return the day after the last stored statistic, or 90 days ago."""
-        try:
-            last_stats = await get_instance(self.hass).async_add_executor_job(
-                get_last_statistics,
-                self.hass,
-                1,
-                STATISTIC_ID_MAINS,
-                True,
-                {"sum"},
-            )
-            if last_stats and STATISTIC_ID_MAINS in last_stats:
-                last_ts   = last_stats[STATISTIC_ID_MAINS][0]["start"]
-                last_date = datetime.fromtimestamp(last_ts, tz=dt_util.UTC).date()
-                _LOGGER.debug("Last statistic date = %s", last_date)
-                return last_date + timedelta(days=1)
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.debug("Could not read last statistics: %s", exc)
-
-        return date.today() - timedelta(days=90)
-
-    async def _import_range(self, start_date: date, end_date: date) -> list[dict]:
-        """Fetch a date range in a single batched Browserless call and store statistics."""
-        num_days = (end_date - start_date).days + 1
-        _LOGGER.info(
-            "Fetching %d day(s) of usage [%s → %s] via Browserless (%s)",
-            num_days, start_date, end_date, self._client.portal,
+        Args:
+            hass: Home Assistant instance.
+            entry: The config entry that owns this coordinator.
+            client: Portal client whose session already holds the stored cookies.
+        """
+        super().__init__(hass, _LOGGER, config_entry=entry, name=DOMAIN, update_interval=self._interval(entry))
+        self.client = client
+        self.ids = AccountIds(
+            billing_account_id=entry.data[CONF_BILLING_ACCOUNT_ID],
+            meter_id=entry.data[CONF_METER_ID],
+            meter_serial=entry.data.get(CONF_METER_SERIAL),
         )
 
-        raw     = await self._client.get_usage_range(start_date, end_date)
-        records = parse_usage_records(raw)
+    # --------------------------------------------------------------- scheduling
 
-        if not records:
-            _LOGGER.warning("No usage records returned for %s → %s", start_date, end_date)
-            return []
+    @staticmethod
+    def _interval(entry: SewConfigEntry) -> timedelta:
+        """Return the time until the next poll.
 
-        await self._insert_statistics(records)
-        return records
+        At the default one-day interval the poll is pinned to ``POLL_HOUR`` local time so it runs when
+        the previous day's readings are most likely available; any other interval is used as given.
+        """
+        minutes = int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+        if minutes != DEFAULT_SCAN_INTERVAL:
+            return timedelta(minutes=minutes)
+        now = dt_util.now()
+        next_run = now.replace(hour=POLL_HOUR, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        return next_run - now
 
-    async def _insert_statistics(self, records: list[dict]) -> None:
-        """Insert parsed records as HA long-term statistics."""
-        existing_sum_mains    = await self._get_last_sum(STATISTIC_ID_MAINS)
-        existing_sum_recycled = await self._get_last_sum(STATISTIC_ID_RECYCLED)
+    # ------------------------------------------------------------------ polling
 
-        running_mains    = existing_sum_mains
-        running_recycled = existing_sum_recycled
-        mains_stats:    list[StatisticData] = []
-        recycled_stats: list[StatisticData] = []
+    async def _async_update_data(self) -> SewData:
+        """Fetch the trailing window (or the full backfill on first run) and store statistics."""
+        yesterday = dt_util.now().date() - timedelta(days=1)
+        first_run = await self._async_last_statistic_day() is None
+        window_days = BACKFILL_DAYS if first_run else TRAILING_WINDOW_DAYS
+        start = yesterday - timedelta(days=window_days - 1)
+        try:
+            data = await self._async_import(start, yesterday)
+        finally:
+            # Re-evaluate the delay to the next poll so the daily run stays pinned to POLL_HOUR.
+            self.update_interval = self._interval(self.config_entry)
+        return data
 
-        for record in records:
-            record_date: date  = record[DATA_DATE]
-            mains:       float = record[DATA_MAINS]
-            recycled:    float = record[DATA_RECYCLED]
+    async def async_import_from(self, start: date) -> None:
+        """Import every day from ``start`` to yesterday, then notify entities.
 
-            local_dt = datetime.combine(record_date, datetime.min.time()).replace(
-                hour=11, minute=0, second=0, microsecond=0
+        Args:
+            start: First day to import.
+        """
+        yesterday = dt_util.now().date() - timedelta(days=1)
+        if start > yesterday:
+            raise ValueError("start date must be before today")
+        self.async_set_updated_data(await self._async_import(start, yesterday))
+
+    async def _async_import(self, start: date, end: date) -> SewData:
+        """Fetch ``start``..``end`` from the portal, import statistics and build the shared state.
+
+        Raises:
+            ConfigEntryAuthFailed: If the stored session is no longer accepted, triggering reauth.
+            UpdateFailed: If the portal cannot be reached or answers unexpectedly.
+        """
+        try:
+            if not await self.client.async_is_alive():
+                raise ConfigEntryAuthFailed("Portal session expired; a new login code is required")
+            usage = await self.client.async_fetch_usage(self.ids, start, end)
+        except SewAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except SewConnectionError as err:
+            raise UpdateFailed(f"Cannot reach the portal: {err}") from err
+        except SewProtocolError as err:
+            raise UpdateFailed(f"Unexpected portal response: {err}") from err
+
+        self._async_store_cookies()
+        total = await self._async_import_statistics(usage)
+        latest = next((day for day in reversed(usage) if day.available and day.litres > 0), None)
+        _LOGGER.debug("Imported %d day(s) %s..%s; latest reading %s", len(usage), start, end, latest)
+        return SewData(ids=self.ids, latest=latest, total_litres=total, last_poll=dt_util.utcnow(), window=tuple(usage))
+
+    def _async_store_cookies(self) -> None:
+        """Persist the (possibly refreshed) session cookies so a restart needs no new login."""
+        cookies = self.client.export_cookies()
+        if cookies != self.config_entry.data.get(CONF_COOKIES):
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, data={**self.config_entry.data, CONF_COOKIES: cookies}
             )
-            utc_dt = dt_util.as_utc(dt_util.as_local(local_dt))
 
-            running_mains    += mains
-            running_recycled += recycled
+    # --------------------------------------------------------------- statistics
 
-            mains_stats.append(StatisticData(start=utc_dt, state=mains,    sum=running_mains))
-            recycled_stats.append(StatisticData(start=utc_dt, state=recycled, sum=running_recycled))
-
-        portal_label = self._client.attribution
-
-        mains_meta = StatisticMetaData(
-            has_mean=False, has_sum=True,
-            name=f"Water Usage Mains ({portal_label})",
+    @staticmethod
+    def _metadata() -> StatisticMetaData:
+        """Describe the mains-water external statistic used by the Energy dashboard."""
+        return StatisticMetaData(
+            has_sum=True,
+            mean_type=StatisticMeanType.NONE,
+            name="South East Water mains usage",
             source=DOMAIN,
             statistic_id=STATISTIC_ID_MAINS,
-            unit_of_measurement=UnitOfVolume.LITERS,
-        )
-        recycled_meta = StatisticMetaData(
-            has_mean=False, has_sum=True,
-            name=f"Water Usage Recycled ({portal_label})",
-            source=DOMAIN,
-            statistic_id=STATISTIC_ID_RECYCLED,
+            unit_class=VolumeConverter.UNIT_CLASS,
             unit_of_measurement=UnitOfVolume.LITERS,
         )
 
-        if mains_stats:
-            async_add_external_statistics(self.hass, mains_meta, mains_stats)
-            _LOGGER.info("Inserted %d mains statistics", len(mains_stats))
-        if recycled_stats:
-            async_add_external_statistics(self.hass, recycled_meta, recycled_stats)
-            _LOGGER.info("Inserted %d recycled statistics", len(recycled_stats))
+    async def _async_last_statistic_day(self) -> date | None:
+        """Return the local day of the newest stored statistic, or ``None`` before the first import."""
+        rows = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, 1, STATISTIC_ID_MAINS, True, {"sum"}
+        )
+        if not (stats := rows.get(STATISTIC_ID_MAINS)):
+            return None
+        return dt_util.as_local(dt_util.utc_from_timestamp(stats[0]["start"])).date()
 
-    async def _get_last_sum(self, statistic_id: str) -> float:
-        try:
-            last = await get_instance(self.hass).async_add_executor_job(
-                get_last_statistics, self.hass, 1, statistic_id, True, {"sum"},
+    async def _async_sum_before(self, day: date) -> float:
+        """Return the running sum of the newest statistic row before ``day`` (0 if there is none)."""
+        day_start = dt_util.start_of_local_day(day)
+        rows = await get_instance(self.hass).async_add_executor_job(
+            statistics_during_period,
+            self.hass,
+            day_start - timedelta(days=LOOKBACK_DAYS),
+            day_start,
+            {STATISTIC_ID_MAINS},
+            "day",
+            None,
+            {"sum"},
+        )
+        if not (stats := rows.get(STATISTIC_ID_MAINS)):
+            return 0.0
+        return float(stats[-1].get("sum") or 0.0)
+
+    async def _async_import_statistics(self, usage: list[DailyUsage]) -> float:
+        """Write one statistic row per day and return the running total after the last day.
+
+        Rows are keyed by their start time, so re-importing a day simply overwrites it; the running
+        sum is rebuilt from the value recorded just before the window so corrections stay consistent.
+        """
+        if not usage:
+            rows = await get_instance(self.hass).async_add_executor_job(
+                get_last_statistics, self.hass, 1, STATISTIC_ID_MAINS, True, {"sum"}
             )
-            if last and statistic_id in last:
-                return float(last[statistic_id][0].get("sum") or 0.0)
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.debug("Could not retrieve last sum for %s: %s", statistic_id, exc)
-        return 0.0
+            stats = rows.get(STATISTIC_ID_MAINS)
+            return float(stats[0].get("sum") or 0.0) if stats else 0.0
+        running = await self._async_sum_before(usage[0].day)
+        statistics: list[StatisticData] = []
+        for day in usage:
+            running += day.litres
+            statistics.append(StatisticData(start=dt_util.start_of_local_day(day.day), state=day.litres, sum=running))
+        async_add_external_statistics(self.hass, self._metadata(), statistics)
+        return running

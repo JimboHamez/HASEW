@@ -27,3 +27,8 @@ follow_imports = "silent"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[[tool.mypy.overrides]]
+# Home Assistant re-exports helpers such as recorder.get_instance without listing them in __all__.
+module = ["homeassistant.*"]
+implicit_reexport = true

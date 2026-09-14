@@ -1,9 +1,10 @@
-"""Sensor platform for Water Portal (South East Water / Yarra Valley Water)."""
+"""Sensor platform for the South East Water integration."""
 
 from __future__ import annotations
 
-import logging
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -12,115 +13,112 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfVolume
+from homeassistant.const import EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import COORDINATOR, DOMAIN, PORTAL_OPTIONS, DEFAULT_PORTAL
-from .coordinator import WaterPortalCoordinator
+from .const import ATTRIBUTION, DOMAIN, MANUFACTURER
+from .coordinator import SewConfigEntry, SewCoordinator, SewData
 
-_LOGGER = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class WaterSensorEntityDescription(SensorEntityDescription):
-    data_key: str = ""
+type StateValue = date | float | int | str | None
 
 
-SENSOR_DESCRIPTIONS: tuple[WaterSensorEntityDescription, ...] = (
-    WaterSensorEntityDescription(
-        key="last_mains",
-        name="Last Mains Water Reading",
+@dataclass(frozen=True, kw_only=True)
+class SewSensorDescription(SensorEntityDescription):
+    """Describe a sensor and how to read its value from the coordinator data."""
+
+    value_fn: Callable[[SewData], StateValue]
+    attributes_fn: Callable[[SewData], dict[str, Any]] | None = None
+
+
+SENSORS: tuple[SewSensorDescription, ...] = (
+    SewSensorDescription(
+        key="daily_usage",
+        translation_key="daily_usage",
+        device_class=SensorDeviceClass.WATER,
         native_unit_of_measurement=UnitOfVolume.LITERS,
-        device_class=SensorDeviceClass.VOLUME,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:water",
-        data_key="last_mains",
+        value_fn=lambda data: data.latest.litres if data.latest else None,
+        attributes_fn=lambda data: {
+            "reading_date": data.latest.day.isoformat() if data.latest else None,
+            "hourly_readings": list(data.latest.readings) if data.latest else None,
+        },
     ),
-    WaterSensorEntityDescription(
-        key="last_recycled",
-        name="Last Recycled Water Reading",
+    SewSensorDescription(
+        key="total_usage",
+        translation_key="total_usage",
+        device_class=SensorDeviceClass.WATER,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         native_unit_of_measurement=UnitOfVolume.LITERS,
-        device_class=SensorDeviceClass.VOLUME,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:water-sync",
-        data_key="last_recycled",
+        value_fn=lambda data: data.total_litres,
     ),
-    WaterSensorEntityDescription(
+    SewSensorDescription(
         key="last_reading_date",
-        name="Last Water Reading Date",
-        icon="mdi:calendar-check",
-        data_key="last_date",
+        translation_key="last_reading_date",
+        device_class=SensorDeviceClass.DATE,
+        value_fn=lambda data: data.latest.day if data.latest else None,
     ),
-    WaterSensorEntityDescription(
+    SewSensorDescription(
+        key="meter_serial",
+        translation_key="meter_serial",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: data.ids.meter_serial,
+    ),
+    SewSensorDescription(
         key="billing_account_id",
-        name="Billing Account ID",
-        icon="mdi:account",
-        data_key="billing_account_id",
+        translation_key="billing_account_id",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.ids.billing_account_id,
     ),
-    WaterSensorEntityDescription(
+    SewSensorDescription(
         key="meter_id",
-        name="Meter ID",
-        icon="mdi:counter",
-        data_key="meter_id",
+        translation_key="meter_id",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.ids.meter_id,
     ),
 )
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    hass: HomeAssistant, entry: SewConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    coordinator: WaterPortalCoordinator = hass.data[DOMAIN][entry.entry_id][COORDINATOR]
-    async_add_entities(
-        WaterSensorEntity(coordinator, entry, desc) for desc in SENSOR_DESCRIPTIONS
-    )
+    """Create one entity per description."""
+    coordinator = entry.runtime_data
+    async_add_entities(SewSensor(coordinator, description) for description in SENSORS)
 
 
-class WaterSensorEntity(CoordinatorEntity[WaterPortalCoordinator], SensorEntity):
-    """A sensor reporting a water portal data point."""
+class SewSensor(CoordinatorEntity[SewCoordinator], SensorEntity):
+    """A value derived from the last portal poll."""
 
-    entity_description: WaterSensorEntityDescription
+    _attr_attribution = ATTRIBUTION
+    _attr_has_entity_name = True
+    entity_description: SewSensorDescription
 
-    def __init__(
-        self,
-        coordinator: WaterPortalCoordinator,
-        entry: ConfigEntry,
-        description: WaterSensorEntityDescription,
-    ) -> None:
+    def __init__(self, coordinator: SewCoordinator, description: SewSensorDescription) -> None:
+        """Bind the entity to its description and the account's device."""
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_unique_id    = f"{entry.entry_id}_{description.key}"
-
-        portal_key   = entry.data.get("portal", DEFAULT_PORTAL)
-        portal_label = PORTAL_OPTIONS.get(portal_key, {}).get("label", "Water Portal")
-
-        self._attr_attribution = PORTAL_OPTIONS.get(portal_key, {}).get(
-            "attribution", "Data provided by water utility"
-        )
+        ids = coordinator.ids
+        self._attr_unique_id = f"{ids.billing_account_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
-            identifiers = {(DOMAIN, entry.entry_id)},
-            name        = portal_label,
-            manufacturer= portal_label,
-            model       = "Digital Water Meter",
+            identifiers={(DOMAIN, ids.billing_account_id)},
+            manufacturer=MANUFACTURER,
+            model="Digital water meter",
+            name=MANUFACTURER,
+            serial_number=ids.meter_serial,
         )
 
     @property
-    def native_value(self) -> Any:
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get(self.entity_description.data_key)
+    def native_value(self) -> StateValue:
+        """Return the sensor value from the coordinator data."""
+        return self.entity_description.value_fn(self.coordinator.data)
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        if self.coordinator.data is None:
-            return {}
-        return {
-            "portal":          self.coordinator.data.get("portal"),
-            "last_fetch":      self.coordinator.data.get("last_fetch"),
-            "records_fetched": self.coordinator.data.get("records_fetched"),
-        }
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return extra attributes when the description defines them."""
+        if self.entity_description.attributes_fn is None:
+            return None
+        return self.entity_description.attributes_fn(self.coordinator.data)

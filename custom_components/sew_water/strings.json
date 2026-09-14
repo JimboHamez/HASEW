@@ -2,56 +2,105 @@
   "config": {
     "step": {
       "user": {
-        "title": "Water Portal",
-        "description": "Connect to your water utility account via a Browserless Chrome instance.\n\nVerify your Browserless instance is running at the URL you provide before continuing.\n\nBilling Account ID and Meter ID are optional – they will be discovered automatically on first run.",
+        "title": "Sign in to South East Water",
+        "description": "Enter the email address and password you use for my.southeastwater.com.au. The portal will then send you a one-time code.",
         "data": {
-          "portal": "Water utility",
-          "username": "Login email",
-          "password": "Login password",
-          "browserless_url": "Browserless URL (e.g. http://192.168.1.125:3000)",
-          "browserless_token": "Browserless token (leave blank if not configured)",
-          "billing_account_id": "Billing Account ID (optional – auto-discovered)",
-          "meter_id": "Meter ID (optional – auto-discovered)",
-          "scan_interval": "Polling interval (minutes, minimum 60)"
+          "username": "Email address",
+          "password": "Password"
+        }
+      },
+      "mfa_channel": {
+        "title": "Where should the code be sent?",
+        "description": "South East Water requires a one-time code for every new login. Choose how to receive it.",
+        "data": {
+          "mfa_channel": "Send code by"
+        }
+      },
+      "mfa_code": {
+        "title": "Enter the one-time code",
+        "description": "Type the 6-digit code South East Water just sent you.",
+        "data": {
+          "mfa_code": "One-time code"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "The saved session for {username} has expired. Continue to request a new one-time code.",
+        "submit": "Request code"
+      },
+      "reauth_password": {
+        "title": "Update password",
+        "description": "The saved password for {username} was rejected. Enter the current password to continue.",
+        "data": {
+          "password": "Password"
         }
       }
     },
     "error": {
-      "cannot_connect_browserless": "Unable to reach the Browserless instance. Check the URL and ensure the service is running.",
-      "invalid_auth": "Authentication failed. Check your login email and password.",
-      "unknown": "Unexpected error. Check the Home Assistant logs."
+      "cannot_connect": "Could not reach the South East Water portal.",
+      "invalid_auth": "The email address or password was not accepted.",
+      "invalid_code": "The code was not accepted. Check it and try again.",
+      "no_mfa_channel": "The portal did not offer a way to send a code.",
+      "unknown": "The portal responded unexpectedly. Check the logs for details."
     },
     "abort": {
-      "already_configured": "This account is already configured."
+      "already_configured": "This account is already configured.",
+      "cannot_connect": "Could not reach the South East Water portal.",
+      "invalid_auth": "The portal rejected the session before setup could finish.",
+      "reauth_successful": "Signed in again successfully.",
+      "unknown": "The portal responded unexpectedly. Check the logs for details.",
+      "wrong_account": "The account you signed in to does not match this entry."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Water Portal Options",
+        "title": "Polling",
         "data": {
-          "scan_interval": "Polling interval (minutes, minimum 60)",
-          "billing_account_id": "Billing Account ID (override)",
-          "meter_id": "Meter ID (override)",
-          "browserless_token": "Browserless token"
+          "scan_interval": "Poll interval"
+        },
+        "data_description": {
+          "scan_interval": "Minutes between polls. At the default of 1440 the poll runs once a day at 2 AM local time, when the previous day's readings are usually available."
         }
       }
     }
   },
+  "selector": {
+    "mfa_channel": {
+      "options": {
+        "Email": "Email",
+        "SMS": "Text message (SMS)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "daily_usage": { "name": "Daily usage" },
+      "total_usage": { "name": "Total usage" },
+      "last_reading_date": { "name": "Last reading date" },
+      "meter_serial": { "name": "Meter serial" },
+      "billing_account_id": { "name": "Billing account ID" },
+      "meter_id": { "name": "Meter ID" }
+    }
+  },
   "services": {
+    "force_import": {
+      "name": "Force import",
+      "description": "Poll the portal now instead of waiting for the next scheduled poll."
+    },
     "import_from_date": {
-      "name": "Import water usage from date",
-      "description": "Trigger a backfill import of water usage data starting from the supplied date.",
+      "name": "Import from date",
+      "description": "Import every day from the given date up to yesterday into long-term statistics.",
       "fields": {
         "start_date": {
           "name": "Start date",
-          "description": "The earliest date (YYYY-MM-DD) to import data from."
+          "description": "First day to import."
         }
       }
-    },
-    "force_import": {
-      "name": "Force import water usage",
-      "description": "Immediately trigger a water usage data refresh."
     }
+  },
+  "exceptions": {
+    "no_entries": { "message": "South East Water is not set up." },
+    "start_in_future": { "message": "The start date must be before today." }
   }
 }
