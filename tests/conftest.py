@@ -7,7 +7,10 @@ all identifiers replaced by obviously fake values.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
+import importlib.util
 import json
+from pathlib import Path
+import sys
 from typing import Any
 from urllib.parse import quote
 
@@ -15,7 +18,17 @@ import aiohttp
 from aioresponses import aioresponses
 import pytest
 
-from custom_components.sew_water.sew_client import SewClient
+# The client has no Home Assistant imports, but importing it through the package would execute
+# custom_components/sew_water/__init__.py, which does. Load the module straight from its file so the
+# tests run without Home Assistant installed.
+_CLIENT_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "sew_water" / "sew_client.py"
+_spec = importlib.util.spec_from_file_location("sew_client", _CLIENT_PATH)
+assert _spec is not None and _spec.loader is not None
+sew_client = importlib.util.module_from_spec(_spec)
+sys.modules["sew_client"] = sew_client
+_spec.loader.exec_module(sew_client)
+
+SewClient = sew_client.SewClient
 
 BASE = "https://my.southeastwater.com.au"
 FWUID_LOGIN = "LOGINFWUID0000000000000000000000000000000000"

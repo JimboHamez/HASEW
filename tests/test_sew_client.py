@@ -13,7 +13,7 @@ from aioresponses import aioresponses
 import pytest
 from yarl import URL
 
-from custom_components.sew_water.sew_client import (
+from sew_client import (  # loaded from file by conftest.py, without importing the HA package
     USAGE_BATCH_SIZE,
     AccountIds,
     SewAuthError,

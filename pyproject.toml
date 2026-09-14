@@ -13,7 +13,7 @@ convention = "google"
 [tool.ruff.lint.isort]
 force-sort-within-sections = true
 combine-as-imports = true
-known-first-party = ["custom_components.sew_water"]
+known-first-party = ["custom_components.sew_water", "sew_client"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D", "ANN"]
