@@ -33,3 +33,6 @@ SERVICE_IMPORT_FROM_DATE: Final = "import_from_date"
 SERVICE_ATTR_START_DATE: Final = "start_date"
 
 STATISTIC_ID_MAINS: Final = f"{DOMAIN}:water_usage_mains"
+# Local hour each day's statistic row is stamped with. Kept from the 1.x version so re-imports
+# overwrite existing rows instead of adding a second row per day.
+STATISTIC_HOUR: Final = 11

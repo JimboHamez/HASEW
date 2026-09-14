@@ -37,7 +37,10 @@ SENSORS: tuple[SewSensorDescription, ...] = (
     SewSensorDescription(
         key="daily_usage",
         translation_key="daily_usage",
-        device_class=SensorDeviceClass.WATER,
+        # VOLUME (not WATER) so the daily figure can be a MEASUREMENT, which lets the recorder keep
+        # history for it; WATER only permits the total state classes.
+        device_class=SensorDeviceClass.VOLUME,
+        state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfVolume.LITERS,
         value_fn=lambda data: data.latest.litres if data.latest else None,
         attributes_fn=lambda data: {

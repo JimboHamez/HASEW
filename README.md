@@ -63,7 +63,7 @@ One device *South East Water* with:
 
 | Entity | Description |
 |---|---|
-| `sensor.south_east_water_daily_usage` | Most recent day's usage (L); attributes hold the reading date and the 24 hourly readings |
+| `sensor.south_east_water_daily_usage` | Most recent day's usage (L, `measurement`, so its own history is recorded); attributes hold the reading date and the 24 hourly readings |
 | `sensor.south_east_water_total_usage` | Running total of all imported usage (L), `total_increasing` |
 | `sensor.south_east_water_last_reading_date` | Date of the most recent reading |
 | `sensor.south_east_water_meter_serial` | Meter serial number (diagnostic) |

@@ -31,6 +31,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     POLL_HOUR,
+    STATISTIC_HOUR,
     STATISTIC_ID_MAINS,
     TRAILING_WINDOW_DAYS,
 )
@@ -191,14 +192,19 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
             return None
         return dt_util.as_local(dt_util.utc_from_timestamp(stats[0]["start"])).date()
 
+    @staticmethod
+    def _row_start(day: date) -> datetime:
+        """Return the timestamp a day's statistic row is stored under."""
+        return dt_util.start_of_local_day(day) + timedelta(hours=STATISTIC_HOUR)
+
     async def _async_sum_before(self, day: date) -> float:
         """Return the running sum of the newest statistic row before ``day`` (0 if there is none)."""
-        day_start = dt_util.start_of_local_day(day)
+        row_start = self._row_start(day)
         rows = await get_instance(self.hass).async_add_executor_job(
             statistics_during_period,
             self.hass,
-            day_start - timedelta(days=LOOKBACK_DAYS),
-            day_start,
+            row_start - timedelta(days=LOOKBACK_DAYS),
+            row_start,
             {STATISTIC_ID_MAINS},
             "day",
             None,
@@ -224,6 +230,6 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         statistics: list[StatisticData] = []
         for day in usage:
             running += day.litres
-            statistics.append(StatisticData(start=dt_util.start_of_local_day(day.day), state=day.litres, sum=running))
+            statistics.append(StatisticData(start=self._row_start(day.day), state=day.litres, sum=running))
         async_add_external_statistics(self.hass, self._metadata(), statistics)
         return running
