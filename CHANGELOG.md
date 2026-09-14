@@ -18,6 +18,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - `total_usage` sensor (running total, `total_increasing`).
+- Throttling handling: Salesforce's concurrent-request limit (and any HTTP 429/503 with `Retry-After`)
+  triggers a short retry instead of waiting for the next daily poll; a stale Aura context after a
+  Salesforce release is refreshed automatically instead of demanding a new code.
+- The daily poll carries up to 10 minutes of random jitter so installations do not all hit the portal at once.
 - Config-entry diagnostics with credentials, cookies and record IDs redacted.
 - Offline test suite for the portal client (`tests/`).
 

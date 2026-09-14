@@ -52,8 +52,10 @@ MFA_PAGE_PATH = "/apex/PortalMFALoginFlow"
 MFA_CHANNEL_EMAIL = "Email"
 MFA_CHANNEL_SMS = "SMS"
 
-# One batched POST covers this many single-day usage actions; 120 was verified to work.
-USAGE_BATCH_SIZE = 60
+# One batched POST covers this many single-day usage actions. 120 was verified to work, but a
+# request that runs longer than five seconds counts against Salesforce's org-wide concurrent
+# long-running Apex limit (shared by every portal user); 30 actions finish comfortably under that.
+USAGE_BATCH_SIZE = 30
 # The portal reports hourly readings per day; the client sums them into a daily total.
 USAGE_RESOLUTION = "hourly"
 
@@ -70,6 +72,8 @@ _MFA_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 _RECORD_ID_RE = re.compile(r"\b(a0[89][0-9A-Za-z]{15}|a1K[0-9A-Za-z]{15})\b")
+# Salesforce reports throttling as an Apex error message, not as an HTTP status.
+_BUSY_RE = re.compile(r"concurrent requests limit|request limit exceeded|too many requests", re.IGNORECASE)
 
 
 class SewError(Exception):
@@ -78,6 +82,19 @@ class SewError(Exception):
 
 class SewConnectionError(SewError):
     """The portal could not be reached or returned a server error."""
+
+
+class SewBusyError(SewConnectionError):
+    """The portal is throttling requests; retry later.
+
+    Attributes:
+        retry_after: Seconds the portal asked us to wait, when it said.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        """Create the error with an optional retry hint."""
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class SewAuthError(SewError):
@@ -277,6 +294,16 @@ def _parse_aura_context(page: str, expected_app: str | None = None) -> AuraConte
     raise SewProtocolError("Aura context not found on page")
 
 
+def _retry_after_seconds(value: str | None) -> float | None:
+    """Parse a ``Retry-After`` header given in seconds; dates are ignored."""
+    if value is None:
+        return None
+    try:
+        return max(float(value.strip()), 0.0)
+    except ValueError:
+        return None
+
+
 def _find_record_ids(obj: Any, prefix: str) -> list[str]:
     """Return every Salesforce record ID with the given key prefix found anywhere in a JSON value."""
     found: list[str] = []
@@ -335,6 +362,11 @@ class SewClient:
         try:
             async with self._session.request(method, url, headers=headers, **kwargs) as resp:
                 text = await resp.text()
+                if resp.status in (429, 503):
+                    raise SewBusyError(
+                        f"Portal is busy (HTTP {resp.status}) for {resp.url.path}",
+                        retry_after=_retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 if resp.status >= 500:
                     raise SewConnectionError(f"Portal returned HTTP {resp.status} for {resp.url.path}")
                 return resp, text
@@ -347,6 +379,8 @@ class SewClient:
         context: AuraContext,
         token: str | None,
         page_uri: str,
+        *,
+        resync: bool = True,
     ) -> list[dict[str, Any]]:
         """Send one Aura message and return its list of action results.
 
@@ -355,9 +389,12 @@ class SewClient:
             context: Aura context to send.
             token: Aura CSRF token; ``None`` for anonymous (login page) calls.
             page_uri: Value for ``aura.pageURI``.
+            resync: When the portal reports the framework context is stale (after a Salesforce
+                release), reload the home page for a fresh one and retry once.
 
         Raises:
             SewAuthError: If the session is invalid.
+            SewBusyError: If the portal is throttling.
             SewProtocolError: If the response is not an Aura envelope.
         """
         message = {"actions": [{"id": f"{i + 1};a", **action} for i, action in enumerate(actions)]}
@@ -384,9 +421,20 @@ class SewClient:
             raise SewProtocolError("Aura response is not JSON") from err
         if envelope.get("exceptionEvent"):
             descriptor = str(envelope.get("event", {}).get("descriptor", ""))
-            if "invalidSession" in descriptor or "clientOutOfSync" in descriptor:
+            detail = str(envelope.get("message") or "")
+            if "invalidSession" in descriptor:
                 raise SewAuthError(f"Aura rejected the session ({descriptor})")
-            raise SewProtocolError(f"Aura exception event: {descriptor or envelope.get('message')}")
+            if "clientOutOfSync" in descriptor:
+                if not resync or token is None:
+                    raise SewProtocolError("Aura framework context is out of sync")
+                _LOGGER.debug("Aura context out of sync; reloading the home page")
+                if not await self._load_home():
+                    raise SewAuthError("Portal session is no longer valid")
+                assert self._context is not None and self._token is not None
+                return await self._aura(actions, self._context, self._token, page_uri, resync=False)
+            if _BUSY_RE.search(detail):
+                raise SewBusyError(f"Portal is throttling requests: {detail}")
+            raise SewProtocolError(f"Aura exception event: {descriptor or detail}")
         results = envelope.get("actions")
         if not isinstance(results, list) or len(results) != len(actions):
             raise SewProtocolError("Aura response has an unexpected number of actions")
@@ -398,6 +446,8 @@ class SewClient:
         if result.get("state") != "SUCCESS":
             errors = result.get("error") or []
             message = errors[0].get("message") if errors and isinstance(errors[0], dict) else result.get("state")
+            if _BUSY_RE.search(str(message)):
+                raise SewBusyError(f"Portal is throttling requests: {message}")
             raise SewProtocolError(f"Aura action failed: {message}")
         return result.get("returnValue")
 

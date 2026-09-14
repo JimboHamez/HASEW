@@ -36,6 +36,8 @@ untestable), YAML configuration, PyPI packaging.
 | D10 | Statistic rows stamped at 11:00 local; daily sensor is `VOLUME`/`MEASUREMENT`. | Both inherited from 1.x for continuity of stored data and recorder history (G5). |
 | D11 | Config-entry `VERSION = 2`; 1.x entries are refused, not migrated. | 1.x entries hold Browserless settings and no session; there is nothing to migrate. Statistics are unaffected. |
 | D12 | Tests cover the client only (offline, `aioresponses`). HA-level tests deferred. | The client is where the risk is; HA plumbing is thin and follows core patterns. |
+| D14 | Throttling is detected from Salesforce's Apex error text ("concurrent requests limit exceeded"), plus HTTP 429/503 with `Retry-After` for good measure, and surfaced as `SewBusyError` → `UpdateFailed(retry_after=15 min)`. Usage batches are 30 actions and the daily poll carries up to 10 min of random jitter. | The core Salesforce platform does not use 429 for Aura requests; the limit that applies is the org-wide cap of 10 synchronous Apex requests running > 5 s, shared by every portal user. Keeping each batch under ~3 s stays out of that pool, jitter avoids installations colliding, and a short retry beats waiting for the next day. |
+| D15 | `clientOutOfSync` reloads the home page for a fresh Aura context and retries once. | It means the cached `fwuid` is stale after a Salesforce release, not that the session is dead; treating it as an auth failure would demand a needless one-time code. |
 | D13 | Billing-account ID, meter record ID and meter serial are not entities and not on the device card. | They identify the customer's account; as entities they would be persisted in the recorder and appear in every state dump. They stay in the config entry (needed for API calls), are redacted from diagnostics, and are logged once at debug level on startup for checking. |
 
 ## 3. Architecture
@@ -79,12 +81,21 @@ login flow for the one-time code.
 | 5 | `POST /PortalMFALoginFlow` with `AJAXREQUEST=_viewRoot`, form id, `channel`, `…:channelRadio`, ViewState×4, send button | Response is a full XHTML page with a **new ViewState**, `otpBox1..6`, `…:otpHidden` and a "Verify" submit. The new ViewState must be carried forward. |
 | 6 | `POST /PortalMFALoginFlow` with `otpHidden`, `otpBox1..6`, new ViewState×4, verify button | Success = `Location: /s/` header (the client also accepts `<meta name="Location">`). Failure = the same form again with an error span. |
 | 7 | `GET /s/` | Every HTML page load issues a fresh Aura CSRF token in a `__Host-ERIC_PROD-*` cookie; the page names that cookie in its `"eikoocnekot"` bootstrap setting. Context app is `siteforce:communityApp`. A dead session redirects to `/s/login/`. |
-| 8 | `POST /s/sfsites/aura` action `aura://ApexActionController/ACTION$execute`, class `MysewUsageBillingGraphController`, method `getUsageData`, params `{baId, meterId, dateFrom, dateTo, resolution:"hourly"}` | One action per day; 60 actions per POST (120 verified). Returns `[{apiDate, readings[24], serialNo, message, status}]`; the client sums the 24 hourly litres. `resolution:"daily"` was never captured and is not used. |
+| 8 | `POST /s/sfsites/aura` action `aura://ApexActionController/ACTION$execute`, class `MysewUsageBillingGraphController`, method `getUsageData`, params `{baId, meterId, dateFrom, dateTo, resolution:"hourly"}` | One action per day; 30 actions per POST (120 verified to work, 30 keeps each request under the 5 s long-running threshold, see D14). Returns `[{apiDate, readings[24], serialNo, message, status}]`; the client sums the 24 hourly litres. `resolution:"daily"` was never captured and is not used. |
 | 9 | ID discovery: `apex://cm_AccountBillingUsageAURA/ACTION$retrieveBillingAccounts` then `…$retrieveSObject` on `Meter_Details__c` | `baId`/`meterId` are Salesforce record ids (`a08…`, `a1K…`), not the account number or meter serial. **Built from notes, not captures – see §9.** |
 
 Every Aura POST sends `aura.context` (mode, app, fwuid, loaded), `aura.pageURI`, `aura.token` and the
-`message` JSON, form-encoded. `exceptionEvent` responses naming `invalidSession` / `clientOutOfSync`
-are mapped to `SewAuthError`.
+`message` JSON, form-encoded. Error mapping: `exceptionEvent` naming `invalidSession` → `SewAuthError`;
+`clientOutOfSync` → reload `/s/` and retry once (D15); an action `state: ERROR` or exception message
+matching *concurrent requests limit / request limit exceeded / too many requests*, or HTTP 429/503 →
+`SewBusyError` with any `Retry-After` seconds (D14); other errors → `SewProtocolError`.
+
+**Throttling on this platform.** Experience Cloud/Aura does not return 429 or `Retry-After` (those
+belong to Salesforce's Commerce and Marketing Cloud APIs). What applies is the org-wide *concurrent
+long-running Apex* limit: at most 10 synchronous requests running longer than 5 s, across all users of
+the org, after which every Apex request is refused with the error text above until one finishes.
+Site page-view and login allocations are administrative and give no client-side signal; session reuse
+keeps our contribution to one page view per day and one login per session.
 
 ## 5. Session lifecycle
 
@@ -127,8 +138,10 @@ setup ──▶ login+MFA ──▶ cookies saved in entry.data
 
 `SewCoordinator._interval` recomputes `update_interval` after every poll:
 
-- interval == 1440 → `next 02:00 local − now` (never a fixed 24 h, so it does not drift);
+- interval == 1440 → `next 02:00 local − now` plus 0–10 min of random jitter (never a fixed 24 h, so it does not drift, and installations do not collide);
 - any other value → `timedelta(minutes=interval)` (minimum 60, enforced by the options selector).
+
+A `SewBusyError` from the poll becomes `UpdateFailed(retry_after=…)`: the portal's `Retry-After` if it sent one, else 15 minutes; the coordinator honours it for the next attempt and the daily schedule resumes after.
 
 `import_from_date` bypasses the window and imports `start..yesterday` in the same code path, then
 pushes the result to entities with `async_set_updated_data`.

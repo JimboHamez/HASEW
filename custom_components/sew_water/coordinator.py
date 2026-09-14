@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
+import random
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
@@ -31,6 +32,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     POLL_HOUR,
+    POLL_JITTER_MINUTES,
     STATISTIC_HOUR,
     STATISTIC_ID_MAINS,
     TRAILING_WINDOW_DAYS,
@@ -39,6 +41,7 @@ from .sew_client import (
     AccountIds,
     DailyUsage,
     SewAuthError,
+    SewBusyError,
     SewClient,
     SewConnectionError,
     SewProtocolError,
@@ -46,6 +49,8 @@ from .sew_client import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Seconds to wait before retrying when the portal reports it is throttling and gives no hint.
+BUSY_RETRY_SECONDS = 15 * 60
 # How far back to look for the last statistic row preceding a re-import window.
 LOOKBACK_DAYS = 3660
 
@@ -99,7 +104,9 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         """Return the time until the next poll.
 
         At the default one-day interval the poll is pinned to ``POLL_HOUR`` local time so it runs when
-        the previous day's readings are most likely available; any other interval is used as given.
+        the previous day's readings are most likely available, plus a random offset of up to
+        ``POLL_JITTER_MINUTES`` so installations do not all hit the portal in the same second; any
+        other interval is used as given.
         """
         minutes = int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
         if minutes != DEFAULT_SCAN_INTERVAL:
@@ -108,7 +115,7 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         next_run = now.replace(hour=POLL_HOUR, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
-        return next_run - now
+        return next_run - now + timedelta(seconds=random.uniform(0, POLL_JITTER_MINUTES * 60))
 
     # ------------------------------------------------------------------ polling
 
@@ -141,7 +148,8 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
 
         Raises:
             ConfigEntryAuthFailed: If the stored session is no longer accepted, triggering reauth.
-            UpdateFailed: If the portal cannot be reached or answers unexpectedly.
+            UpdateFailed: If the portal is busy (with a short ``retry_after``), unreachable or answers
+                unexpectedly.
         """
         try:
             if not await self.client.async_is_alive():
@@ -149,6 +157,10 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
             usage = await self.client.async_fetch_usage(self.ids, start, end)
         except SewAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
+        except SewBusyError as err:
+            # Salesforce throttles with an Apex error rather than a 429; back off briefly instead of
+            # waiting for the next daily poll.
+            raise UpdateFailed(str(err), retry_after=err.retry_after or BUSY_RETRY_SECONDS) from err
         except SewConnectionError as err:
             raise UpdateFailed(f"Cannot reach the portal: {err}") from err
         except SewProtocolError as err:

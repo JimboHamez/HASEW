@@ -151,7 +151,7 @@ If the portal rejects the saved password, an extra **Update password** step appe
 - **Session reuse** — the cookies from the one login you did at setup are stored in the config entry and re-sent on every poll. Each successful poll writes the refreshed cookies back, so the session survives Home Assistant restarts and is not tied to a browser.
 - **Trailing re-import** — every poll fetches the last 30 days in one batched request and re-imports them. Statistics rows are keyed by day, so re-importing overwrites in place: late-published days get filled in and corrections are applied without duplicates. The first poll after setup imports 90 days.
 - **Statistics and sensors, not one or the other** — a sensor cannot carry retroactive history and a statistic cannot drive a card or an automation, so the integration keeps both. The statistic is the source of truth; the *Total usage* sensor mirrors its running total.
-- **02:00 local poll** — the previous day's readings are usually published by then. The next poll is always scheduled as "next 02:00", so it never drifts.
+- **02:00 local poll** — the previous day's readings are usually published by then. The next poll is always scheduled as "next 02:00" (plus a few random minutes so every installation doesn't hit the portal at the same second), so it never drifts. If the portal reports it is busy, the poll retries after 15 minutes rather than waiting a day.
 - **Zero days** — the portal returns 24 zeros both for an unpublished day and for a genuinely empty one. The *Daily usage* / *Last reading date* sensors skip zero days; statistics import them as 0 L and a later poll corrects them if data appears.
 
 The protocol, the statistics rules and every design decision are in [DESIGN_DOCUMENT.md](DESIGN_DOCUMENT.md).

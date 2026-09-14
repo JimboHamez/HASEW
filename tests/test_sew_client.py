@@ -17,6 +17,7 @@ from sew_client import (  # loaded from file by conftest.py, without importing t
     USAGE_BATCH_SIZE,
     AccountIds,
     SewAuthError,
+    SewBusyError,
     SewClient,
     SewConnectionError,
     SewProtocolError,
@@ -412,4 +413,74 @@ async def test_fetch_usage_non_json_is_protocol_error(client: SewClient, mocked:
     mock_home(mocked)
     mocked.post(AURA_URL, status=200, body="<html>oops</html>", content_type="text/html")
     with pytest.raises(SewProtocolError, match="not JSON"):
+        await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+
+
+# -------------------------------------------------------------------------- throttling
+
+
+async def test_concurrent_limit_apex_error_is_busy_error(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    payload = aura_envelope(None, state="ERROR")
+    payload["actions"][0]["error"] = [{"message": "Unable to process request. Concurrent requests limit exceeded."}]
+    mocked.post(AURA_URL, status=200, payload=payload)
+    with pytest.raises(SewBusyError, match="Concurrent requests limit") as info:
+        await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+    assert info.value.retry_after is None
+    assert isinstance(info.value, SewConnectionError)
+
+
+async def test_http_429_with_retry_after_is_busy_error(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    mocked.post(AURA_URL, status=429, body="slow down", headers={"Retry-After": "30"})
+    with pytest.raises(SewBusyError, match="429") as info:
+        await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+    assert info.value.retry_after == 30.0
+
+
+async def test_http_503_without_retry_after_is_busy_error(client: SewClient, mocked: aioresponses) -> None:
+    mocked.get(
+        f"{BASE}/s/login/", status=503, body="maintenance", headers={"Retry-After": "Thu, 01 Jan 2026 00:00:00 GMT"}
+    )
+    with pytest.raises(SewBusyError) as info:
+        await client.async_login("user@example.com", "hunter2")
+    assert info.value.retry_after is None
+
+
+async def test_client_out_of_sync_refreshes_context_and_retries(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    mocked.post(
+        AURA_URL, status=200, payload={"exceptionEvent": True, "event": {"descriptor": "markup://aura:clientOutOfSync"}}
+    )
+    mocked.get(
+        f"{BASE}/s/",
+        status=200,
+        body=home_page().replace(FWUID_HOME, "NEWFWUID"),
+        headers={"Set-Cookie": "__Host-ERIC_PROD-123456789=NEW-TOKEN; Path=/; Secure; HttpOnly"},
+    )
+    mocked.post(AURA_URL, status=200, payload=aura_envelope(usage_day("2026-09-13", [1] * 24)))
+    usage = await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+    assert usage[0].litres == 24
+    retry = posted_form(mocked, "/s/sfsites/aura", index=1)
+    assert retry["aura.token"] == "NEW-TOKEN"
+    assert json.loads(retry["aura.context"])["fwuid"] == "NEWFWUID"
+
+
+async def test_client_out_of_sync_twice_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    out_of_sync = {"exceptionEvent": True, "event": {"descriptor": "markup://aura:clientOutOfSync"}}
+    mocked.post(AURA_URL, status=200, payload=out_of_sync)
+    mock_home(mocked)
+    mocked.post(AURA_URL, status=200, payload=out_of_sync)
+    with pytest.raises(SewProtocolError, match="out of sync"):
+        await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+
+
+async def test_client_out_of_sync_with_dead_session_is_auth_error(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    mocked.post(
+        AURA_URL, status=200, payload={"exceptionEvent": True, "event": {"descriptor": "markup://aura:clientOutOfSync"}}
+    )
+    mock_dead_home(mocked)
+    with pytest.raises(SewAuthError):
         await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))

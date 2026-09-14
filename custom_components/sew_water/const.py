@@ -27,6 +27,8 @@ DEFAULT_SCAN_INTERVAL: Final = 1440
 MIN_SCAN_INTERVAL: Final = 60
 # Local hour of day for the daily poll, when the previous day's readings are most likely published.
 POLL_HOUR: Final = 2
+# Random delay added to the daily poll so installations do not all query the portal at once.
+POLL_JITTER_MINUTES: Final = 10
 
 SERVICE_FORCE_IMPORT: Final = "force_import"
 SERVICE_IMPORT_FROM_DATE: Final = "import_from_date"
