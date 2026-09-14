@@ -36,9 +36,9 @@ untestable), YAML configuration, PyPI packaging.
 | D10 | Statistic rows stamped at 11:00 local; daily sensor is `VOLUME`/`MEASUREMENT`. | Both inherited from 1.x for continuity of stored data and recorder history (G5). |
 | D11 | Config-entry `VERSION = 2`; 1.x entries are refused, not migrated. | 1.x entries hold Browserless settings and no session; there is nothing to migrate. Statistics are unaffected. |
 | D12 | Tests cover the client only (offline, `aioresponses`). HA-level tests deferred. | The client is where the risk is; HA plumbing is thin and follows core patterns. |
+| D13 | Billing-account ID, meter record ID and meter serial are not entities and not on the device card. | They identify the customer's account; as entities they would be persisted in the recorder and appear in every state dump. They stay in the config entry (needed for API calls), are redacted from diagnostics, and are logged once at debug level on startup for checking. |
 | D14 | Throttling is detected from Salesforce's Apex error text ("concurrent requests limit exceeded"), plus HTTP 429/503 with `Retry-After` for good measure, and surfaced as `SewBusyError` → `UpdateFailed(retry_after=15 min)`. Usage batches are 30 actions and the daily poll carries up to 10 min of random jitter. | The core Salesforce platform does not use 429 for Aura requests; the limit that applies is the org-wide cap of 10 synchronous Apex requests running > 5 s, shared by every portal user. Keeping each batch under ~3 s stays out of that pool, jitter avoids installations colliding, and a short retry beats waiting for the next day. |
 | D15 | `clientOutOfSync` reloads the home page for a fresh Aura context and retries once. | It means the cached `fwuid` is stale after a Salesforce release, not that the session is dead; treating it as an auth failure would demand a needless one-time code. |
-| D13 | Billing-account ID, meter record ID and meter serial are not entities and not on the device card. | They identify the customer's account; as entities they would be persisted in the recorder and appear in every state dump. They stay in the config entry (needed for API calls), are redacted from diagnostics, and are logged once at debug level on startup for checking. |
 
 ## 3. Architecture
 
@@ -166,11 +166,13 @@ pushes the result to entities with `async_set_updated_data`.
 
 ## 10. Testing
 
-`tests/test_sew_client.py` (27 cases, offline, `aioresponses`) covers: login success / bad
+`tests/test_sew_client.py` (33 cases, offline, `aioresponses`) covers: login success / bad
 credentials / no-MFA / maintenance page / 5xx / network failure; MFA field names, ViewState carry-
 forward, wrong code with retry, code length, step ordering; session alive / dead / token-less and
-cookie round-trip; id discovery; usage summing, batching across 60-action pages, unavailable days,
-`invalidSession`, action errors and non-JSON responses.
+cookie round-trip; id discovery; usage summing, batching across 30-action pages, unavailable days,
+`invalidSession`, action errors and non-JSON responses; throttling via Apex error text, HTTP 429 with
+`Retry-After`, 503 with an unparseable `Retry-After`; `clientOutOfSync` resync success, repeated
+failure, and dead session.
 
 Tooling: `ruff` (120 columns, Google docstrings, HA import order), `mypy --strict`, `pytest` with
 `asyncio_mode = auto`. Configuration in `pyproject.toml`.
