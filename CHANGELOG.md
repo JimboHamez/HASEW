@@ -17,7 +17,7 @@ All notable changes to this project are documented here. The format follows
 - Minimum Home Assistant 2025.8.
 
 ### Added
-- `total_usage` sensor (running total, `total_increasing`) and `meter_serial` diagnostic.
+- `total_usage` sensor (running total, `total_increasing`).
 - Config-entry diagnostics with credentials, cookies and record IDs redacted.
 - Offline test suite for the portal client (`tests/`).
 
@@ -25,6 +25,7 @@ All notable changes to this project are documented here. The format follows
 - Yarra Valley Water portal option (untestable; same backend, could be re-added).
 - Recycled-water statistic and sensor (untestable).
 - Browserless URL/token, billing-account and meter-ID configuration fields (IDs are discovered).
+- Billing-account and meter-ID sensors: account identifiers are no longer exposed as entities.
 
 ## [1.0.1] — 2026-09-13
 

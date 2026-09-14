@@ -13,7 +13,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory, UnitOfVolume
+from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -62,26 +62,6 @@ SENSORS: tuple[SewSensorDescription, ...] = (
         device_class=SensorDeviceClass.DATE,
         value_fn=lambda data: data.latest.day if data.latest else None,
     ),
-    SewSensorDescription(
-        key="meter_serial",
-        translation_key="meter_serial",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.ids.meter_serial,
-    ),
-    SewSensorDescription(
-        key="billing_account_id",
-        translation_key="billing_account_id",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
-        value_fn=lambda data: data.ids.billing_account_id,
-    ),
-    SewSensorDescription(
-        key="meter_id",
-        translation_key="meter_id",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
-        value_fn=lambda data: data.ids.meter_id,
-    ),
 )
 
 
@@ -104,14 +84,15 @@ class SewSensor(CoordinatorEntity[SewCoordinator], SensorEntity):
         """Bind the entity to its description and the account's device."""
         super().__init__(coordinator)
         self.entity_description = description
-        ids = coordinator.ids
-        self._attr_unique_id = f"{ids.billing_account_id}_{description.key}"
+        # Keyed by the config entry, not the billing account, so account identifiers never reach the
+        # entity or device registries.
+        entry_id = coordinator.config_entry.entry_id
+        self._attr_unique_id = f"{entry_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, ids.billing_account_id)},
+            identifiers={(DOMAIN, entry_id)},
             manufacturer=MANUFACTURER,
             model="Digital water meter",
             name=MANUFACTURER,
-            serial_number=ids.meter_serial,
         )
 
     @property

@@ -17,7 +17,7 @@ Daily mains water usage from the [South East Water](https://my.southeastwater.co
 It gives you:
 
 - **Energy dashboard water** — one long-term statistic, `sew_water:water_usage_mains`, with a row for every day.
-- **Daily sensors** — yesterday's litres (with the 24 hourly readings as attributes), a running total, the reading date and the meter serial.
+- **Daily sensors** — yesterday's litres (with the 24 hourly readings as attributes), a running total and the reading date.
 - **One login** — sign in once with your portal email, password and a one-time code; the session is kept and re-used, and survives restarts.
 - **Late data handled** — the portal publishes readings a day or two late and sometimes corrects them, so every poll re-imports the last 30 days.
 - **Painless re-login** — when the portal finally expires the session, Home Assistant's standard *Reauthentication required* card asks only for a new code.
@@ -65,7 +65,7 @@ Only needed if you want the water card on the Energy dashboard. Nothing to set u
 ## Installation
 
 ![South East Water sensors in Home Assistant](images/dashboard.png)
-<!-- placeholder: capture the device page showing the six sensors -->
+<!-- placeholder: capture the device page showing the three sensors -->
 
 ### HACS (recommended)
 
@@ -173,9 +173,8 @@ All entities sit on one device, **South East Water**.
 | `sensor.south_east_water_daily_usage` | L | Most recent published day's usage. Attributes: `reading_date`, `hourly_readings` (24 values). |
 | `sensor.south_east_water_total_usage` | L | Running total of every day imported (`total_increasing`). |
 | `sensor.south_east_water_last_reading_date` | date | Day the *Daily usage* value belongs to. |
-| `sensor.south_east_water_meter_serial` | — | Meter serial number (diagnostic). |
-| `sensor.south_east_water_billing_account_id` | — | Portal billing-account record ID (diagnostic, **disabled by default**). |
-| `sensor.south_east_water_meter_id` | — | Portal meter record ID (diagnostic, **disabled by default**). |
+
+Account identifiers (billing account, meter record ID, meter serial) are deliberately **not** exposed as entities — they identify your account and would otherwise be kept in the recorder. They live only in the config entry, are redacted from diagnostics, and are written once to the log at debug level on startup if you need to check them.
 
 ---
 

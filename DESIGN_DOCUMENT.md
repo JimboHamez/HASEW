@@ -36,6 +36,7 @@ untestable), YAML configuration, PyPI packaging.
 | D10 | Statistic rows stamped at 11:00 local; daily sensor is `VOLUME`/`MEASUREMENT`. | Both inherited from 1.x for continuity of stored data and recorder history (G5). |
 | D11 | Config-entry `VERSION = 2`; 1.x entries are refused, not migrated. | 1.x entries hold Browserless settings and no session; there is nothing to migrate. Statistics are unaffected. |
 | D12 | Tests cover the client only (offline, `aioresponses`). HA-level tests deferred. | The client is where the risk is; HA plumbing is thin and follows core patterns. |
+| D13 | Billing-account ID, meter record ID and meter serial are not entities and not on the device card. | They identify the customer's account; as entities they would be persisted in the recorder and appear in every state dump. They stay in the config entry (needed for API calls), are redacted from diagnostics, and are logged once at debug level on startup for checking. |
 
 ## 3. Architecture
 
@@ -59,7 +60,7 @@ untestable), YAML configuration, PyPI packaging.
 | `sew_client.py` | Portal protocol only. No HA imports. Raises `SewAuthError`, `SewConnectionError`, `SewProtocolError`. |
 | `config_flow.py` | Setup and reauth steps; options flow. Owns a private HTTP session for the duration of the flow. |
 | `coordinator.py` | `DataUpdateCoordinator[SewData]`; window selection, statistics import, cookie persistence, scheduling. |
-| `sensor.py` | `CoordinatorEntity` sensors described declaratively (`SewSensorDescription.value_fn`). |
+| `sensor.py` | `CoordinatorEntity` sensors described declaratively (`SewSensorDescription.value_fn`). Usage values only — account identifiers are never entities (D13). |
 | `diagnostics.py` | Config-entry diagnostics with credentials, cookies and record ids redacted. |
 | `const.py` | Keys, defaults, statistic id, timing constants. |
 
@@ -134,7 +135,7 @@ pushes the result to entities with `async_set_updated_data`.
 
 ## 8. Security and privacy
 
-- Credentials, cookies and Salesforce record ids are redacted from diagnostics.
+- Credentials, cookies and Salesforce record ids are redacted from diagnostics; identifiers are never entities (D13).
 - Nothing sensitive is logged; the only debug line at auth time logs the portal's *rejection text*,
   never inputs.
 - The client sends a fixed browser user agent; no third-party services are contacted.

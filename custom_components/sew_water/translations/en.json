@@ -83,15 +83,6 @@
       },
       "last_reading_date": {
         "name": "Last reading date"
-      },
-      "meter_serial": {
-        "name": "Meter serial"
-      },
-      "billing_account_id": {
-        "name": "Billing account ID"
-      },
-      "meter_id": {
-        "name": "Meter ID"
       }
     }
   },

@@ -71,6 +71,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: SewConfigEntry) -> bool:
     client.import_cookies(entry.data.get(CONF_COOKIES, []))
 
     coordinator = SewCoordinator(hass, entry, client)
+    # Identifiers are account data, so they are not exposed as entities; they can be checked here
+    # with debug logging enabled.
+    _LOGGER.debug(
+        "Using billing account %s, meter %s (serial %s)",
+        coordinator.ids.billing_account_id,
+        coordinator.ids.meter_id,
+        coordinator.ids.meter_serial,
+    )
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
 
