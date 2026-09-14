@@ -167,8 +167,10 @@ class SewConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         assert self._client is not None
         if user_input is not None:
+            # Option keys are lowercase for translations; the portal wants its own spelling back.
+            channel = next(c for c in self._channels if c.lower() == user_input[CONF_MFA_CHANNEL])
             try:
-                await self._client.async_request_code(user_input[CONF_MFA_CHANNEL])
+                await self._client.async_request_code(channel)
             except SewConnectionError:
                 errors["base"] = "cannot_connect"
             except SewError:
@@ -178,9 +180,11 @@ class SewConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self.async_step_mfa_code()
         schema = vol.Schema(
             {
-                vol.Required(CONF_MFA_CHANNEL, default=self._channels[0]): SelectSelector(
+                vol.Required(CONF_MFA_CHANNEL, default=self._channels[0].lower()): SelectSelector(
                     SelectSelectorConfig(
-                        options=list(self._channels), mode=SelectSelectorMode.LIST, translation_key=CONF_MFA_CHANNEL
+                        options=[c.lower() for c in self._channels],
+                        mode=SelectSelectorMode.LIST,
+                        translation_key=CONF_MFA_CHANNEL,
                     )
                 )
             }

@@ -1,11 +1,14 @@
 {
   "domain": "sew_water",
   "name": "South East Water",
-  "codeowners": ["@JimboHamez"],
+  "codeowners": [
+    "@JimboHamez"
+  ],
   "config_flow": true,
-  "dependencies": ["recorder"],
+  "dependencies": [
+    "recorder"
+  ],
   "documentation": "https://github.com/JimboHamez/HASEW",
-  "homeassistant": "2025.8.0",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/JimboHamez/HASEW/issues",

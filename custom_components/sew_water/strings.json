@@ -68,19 +68,31 @@
   "selector": {
     "mfa_channel": {
       "options": {
-        "Email": "Email",
-        "SMS": "Text message (SMS)"
+        "email": "Email",
+        "sms": "Text message (SMS)"
       }
     }
   },
   "entity": {
     "sensor": {
-      "daily_usage": { "name": "Daily usage" },
-      "total_usage": { "name": "Total usage" },
-      "last_reading_date": { "name": "Last reading date" },
-      "meter_serial": { "name": "Meter serial" },
-      "billing_account_id": { "name": "Billing account ID" },
-      "meter_id": { "name": "Meter ID" }
+      "daily_usage": {
+        "name": "Daily usage"
+      },
+      "total_usage": {
+        "name": "Total usage"
+      },
+      "last_reading_date": {
+        "name": "Last reading date"
+      },
+      "meter_serial": {
+        "name": "Meter serial"
+      },
+      "billing_account_id": {
+        "name": "Billing account ID"
+      },
+      "meter_id": {
+        "name": "Meter ID"
+      }
     }
   },
   "services": {
@@ -100,7 +112,11 @@
     }
   },
   "exceptions": {
-    "no_entries": { "message": "South East Water is not set up." },
-    "start_in_future": { "message": "The start date must be before today." }
+    "no_entries": {
+      "message": "South East Water is not set up."
+    },
+    "start_in_future": {
+      "message": "The start date must be before today."
+    }
   }
 }
