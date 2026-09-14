@@ -36,13 +36,13 @@ Version 2 maps the whole login, code and usage flow to plain HTTP requests. Setu
 
 ---
 
-## 🆕 What's new in v2.0.0
+## 🆕 What's new in v2.0.0b1
 
-The Browserless-based scraper is replaced by a pure-HTTP client. Setup now walks through the portal's one-time code (email or SMS), sessions are stored and re-used across polls and restarts, and re-authentication when a session expires is Home Assistant's standard reauth card. Polling runs at 02:00 local time and re-imports the last 30 days so late-published readings are filled in automatically.
+**Beta.** The Browserless-based scraper is replaced by a pure-HTTP client. Setup now walks through the portal's one-time code (email or SMS), sessions are stored and re-used across polls and restarts, and re-authentication when a session expires is Home Assistant's standard reauth card. Polling runs at 02:00 local time and re-imports the last 30 days so late-published readings are filled in automatically.
 
 **Upgrading?** 1.x config entries cannot be migrated — remove the old entry and add the integration again. Your existing `sew_water:water_usage_mains` statistics are kept and continue seamlessly. Yarra Valley Water and recycled-water support have been removed (see [Compatibility](#compatibility)).
 
-Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/HASEW/releases/tag/v2.0.0).
+Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/HASEW/releases/tag/v2.0.0b1).
 
 ---
 

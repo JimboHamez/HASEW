@@ -3,7 +3,10 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [2.0.0] — unreleased
+## [2.0.0b1] — 2026-09-14
+
+First beta of the pure-HTTP rewrite. Live-verified against the portal for login, MFA, session reuse
+and usage; billing-account/meter discovery is verified on the author's account only.
 
 ### Changed
 - Rewritten on a pure-`aiohttp` client; Browserless / headless Chrome are no longer needed.
