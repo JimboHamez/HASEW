@@ -85,6 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SewConfigEntry) -> bool:
     )
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+    coordinator.async_start_keepalive()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

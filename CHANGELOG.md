@@ -15,6 +15,9 @@ All notable changes to this project are documented here. The format follows
   error the coordinator and services raise.
 - README sections on supported meters, use cases, automation examples, known limitations and
   troubleshooting.
+- Session keep-alive: the portal home page is loaded every 30 minutes between polls so the stored
+  session does not hit the portal's idle timeout (measured at 24 hours, shorter than the daily poll
+  gap). A dead session now triggers re-authentication immediately instead of at the next poll.
 - Integration-level test suite (`tests/ha/`, `pytest-homeassistant-custom-component`) covering the
   config flow, setup/unload, services, coordinator, sensors and diagnostics. Coverage is 99 % and
   CI fails below 95 %.

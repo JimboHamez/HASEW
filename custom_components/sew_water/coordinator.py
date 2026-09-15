@@ -14,10 +14,11 @@ from homeassistant.components.recorder.statistics import (
     get_last_statistics,
     statistics_during_period,
 )
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry, ConfigEntryState
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import VolumeConverter
@@ -31,6 +32,7 @@ from .const import (
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    KEEPALIVE_MINUTES,
     POLL_HOUR,
     POLL_JITTER_MINUTES,
     STATISTIC_ID_MAINS,
@@ -43,6 +45,7 @@ from .sew_client import (
     SewBusyError,
     SewClient,
     SewConnectionError,
+    SewError,
     SewProtocolError,
 )
 
@@ -90,6 +93,7 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         """
         super().__init__(hass, _LOGGER, config_entry=entry, name=DOMAIN, update_interval=self._interval(entry))
         self.client = client
+        self.last_contact: datetime | None = None
         self.ids = AccountIds(
             billing_account_id=entry.data[CONF_BILLING_ACCOUNT_ID],
             meter_id=entry.data[CONF_METER_ID],
@@ -115,6 +119,46 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         if next_run <= now:
             next_run += timedelta(days=1)
         return next_run - now + timedelta(seconds=random.uniform(0, POLL_JITTER_MINUTES * 60))
+
+    # --------------------------------------------------------------- keep-alive
+
+    def async_start_keepalive(self) -> None:
+        """Touch the portal periodically so the stored session outlives the gap between daily polls.
+
+        The timer is cancelled when the config entry unloads.
+        """
+        self.config_entry.async_on_unload(
+            async_track_time_interval(
+                self.hass,
+                self._async_keepalive,
+                timedelta(minutes=KEEPALIVE_MINUTES),
+                name=f"{DOMAIN} keep-alive",
+                cancel_on_shutdown=True,
+            )
+        )
+
+    async def _async_keepalive(self, now: datetime) -> None:
+        """Load the portal home page once; start reauth if the session turns out to be dead."""
+        if self.config_entry.state is not ConfigEntryState.LOADED:
+            return
+        if any(True for _ in self.config_entry.async_get_active_flows(self.hass, {SOURCE_REAUTH})):
+            return
+        if self.last_contact is not None and now - self.last_contact < timedelta(minutes=KEEPALIVE_MINUTES):
+            # A poll or service call already touched the portal recently.
+            return
+        try:
+            alive = await self.client.async_is_alive()
+        except SewError as err:
+            # Transient: the next keep-alive or the daily poll will try again.
+            _LOGGER.debug("Keep-alive skipped: %s", err)
+            return
+        if not alive:
+            _LOGGER.warning("Portal session expired; a new login code is required")
+            self.config_entry.async_start_reauth(self.hass)
+            return
+        self.last_contact = now
+        self._async_store_cookies()
+        _LOGGER.debug("Keep-alive OK")
 
     # ------------------------------------------------------------------ polling
 
@@ -182,6 +226,7 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
                 translation_placeholders={"error": str(err)},
             ) from err
 
+        self.last_contact = dt_util.utcnow()
         self._async_store_cookies()
         total = await self._async_import_statistics(usage)
         latest = next((day for day in reversed(usage) if day.available and day.litres > 0), None)

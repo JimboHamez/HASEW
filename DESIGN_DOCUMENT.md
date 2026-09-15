@@ -39,6 +39,7 @@ untestable), YAML configuration, PyPI packaging.
 | D13 | Billing-account ID, meter record ID and meter serial are not entities and not on the device card. | They identify the customer's account; as entities they would be persisted in the recorder and appear in every state dump. They stay in the config entry (needed for API calls), are redacted from diagnostics, and are logged once at debug level on startup for checking. |
 | D14 | Throttling is detected from Salesforce's Apex error text ("concurrent requests limit exceeded"), plus HTTP 429/503 with `Retry-After` for good measure, and surfaced as `SewBusyError` → `UpdateFailed(retry_after=15 min)`. Usage batches are 30 actions and the daily poll carries up to 10 min of random jitter. | The core Salesforce platform does not use 429 for Aura requests; the limit that applies is the org-wide cap of 10 synchronous Apex requests running > 5 s, shared by every portal user. Keeping each batch under ~3 s stays out of that pool, jitter avoids installations colliding, and a short retry beats waiting for the next day. |
 | D15 | `clientOutOfSync` reloads the home page for a fresh Aura context and retries once. | It means the cached `fwuid` is stale after a Salesforce release, not that the session is dead; treating it as an auth failure would demand a needless one-time code. |
+| D16 | A keep-alive loads `/s/` every `KEEPALIVE_MINUTES` (30) between polls, skipped when the portal was touched more recently than that; a dead session starts reauth directly. | The portal drops a session idle for 24 h and daily polls are always more than 24 h apart, so without it every poll would need a new code. 30 min is the only interval proven so far (22 h with no failure); it is one page load and will be relaxed once the idle timeout is known. |
 
 ## 3. Architecture
 
@@ -116,7 +117,12 @@ setup ──▶ login+MFA ──▶ cookies saved in entry.data
 - `export_cookies` filters the jar to the portal domain and produces a JSON-serialisable list.
   Cookies are written back only when they changed, to avoid needless entry updates.
 - Measured lifetime: a session kept alive with a request every 30 minutes survived 22 h with no
-  failures. The 24 h-idle case is being measured by a daily cron on the dev box (see §9).
+  failures; left idle for 24 h it was dead. The exact idle timeout is being measured (see §9).
+- Keep-alive (D16): `async_track_time_interval` every `KEEPALIVE_MINUTES`, registered from
+  `async_setup_entry` and cancelled with the entry. It calls `async_is_alive()` (one `GET /s/`), writes
+  back refreshed cookies, and skips when the entry is not loaded, a reauth flow is already open, or a
+  poll/service call touched the portal within the interval (`coordinator.last_contact`). A dead session
+  calls `entry.async_start_reauth`; transient errors are logged at debug and left to the next tick.
 
 ## 6. Statistics design
 
@@ -161,7 +167,7 @@ pushes the result to entities with `async_set_updated_data`.
 | Item | Status |
 |---|---|
 | Wrong-code response text and whether the a4j redirect arrives as a header or a meta tag. | Client handles both forms; unverified which the portal uses. |
-| Session idle timeout. | Measured: alive after 22 h with 30-min pings, **dead after 24 h idle** (2026-09-15). A staircase run (2 h / 4 h / 8 h / 12 h idle) is scheduled to find the exact value. Whatever it is, the 24 h + jitter poll gap is too long on its own — a keep-alive ping is needed. |
+| Session idle timeout. | Measured: alive after 22 h with 30-min pings, **dead after 24 h idle** (2026-09-15). A staircase run (2 h / 4 h / 8 h / 12 h idle) is scheduled to find the exact value; `KEEPALIVE_MINUTES` (D16) can then be relaxed. |
 | First end-to-end run in a real Home Assistant. | Pending a one-time code from the account owner. |
 
 ## 10. Testing
@@ -175,12 +181,13 @@ cookie round-trip; id discovery; usage summing, batching across 30-action pages,
 failure, and dead session; plus the protocol edge cases (missing MFA form, ViewState or buttons,
 malformed Aura contexts, HTTP 401/5xx, cookie flag round-trip, single-object usage payloads).
 
-`tests/ha/` (58 cases, `pytest-homeassistant-custom-component`, in-memory recorder, scripted
+`tests/ha/` (62 cases, `pytest-homeassistant-custom-component`, in-memory recorder, scripted
 `FakeClient`) covers: the config flow end to end (user → channel → code, every error and abort path,
 reauth with and without a password change, reconfigure, options); entry setup, retry, reauth trigger, unload,
 v1 refusal with its repair issue, and both services; the coordinator's 90-day backfill, 30-day trailing window, running-total
-arithmetic across re-imports, hourly row layout including the daylight-saving fold, 02:00 scheduling
-and throttling back-off; the three sensors' values,
+arithmetic across re-imports, hourly row layout including the daylight-saving fold, 02:00 scheduling,
+throttling back-off and the keep-alive (registration, skip rules, dead session → reauth, transient
+errors, cancellation on unload); the three sensors' values,
 attributes, device grouping and unavailability; and diagnostics redaction.
 
 Coverage is 99 % overall and every module is above the 95 % threshold, enforced with

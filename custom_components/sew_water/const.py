@@ -29,6 +29,10 @@ MIN_SCAN_INTERVAL: Final = 60
 POLL_HOUR: Final = 2
 # Random delay added to the daily poll so installations do not all query the portal at once.
 POLL_JITTER_MINUTES: Final = 10
+# Minutes between keep-alive requests. The portal drops a session left idle for 24 hours, which is
+# less than the gap between daily polls; a session touched every 30 minutes stayed alive for a full
+# day of measurement. One keep-alive is a single page load.
+KEEPALIVE_MINUTES: Final = 30
 
 SERVICE_FORCE_IMPORT: Final = "force_import"
 SERVICE_IMPORT_FROM_DATE: Final = "import_from_date"
