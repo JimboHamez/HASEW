@@ -25,7 +25,7 @@ untestable), YAML configuration, PyPI packaging.
 | ID | Decision | Rationale |
 |---|---|---|
 | D1 | Transport is `aiohttp`; the client lives inside the integration (`sew_client.py`) rather than on PyPI. | Personal HACS integration; one less release pipeline. The client stays framework-free so it can be tested offline. |
-| D2 | Daily resolution for everything the user sees. | Matches how the portal presents usage and how the Energy dashboard aggregates water. |
+| D2 | Hourly resolution in long-term statistics (the portal's finest); daily in the sensors. | The portal returns 24 hourly readings per day at no extra cost, and hourly rows make every Energy dashboard view accurate. The sensors stay daily because that is the cadence at which data arrives. Changed from daily-only on 2026-09-15. |
 | D3 | First run imports 90 days; every poll re-imports the last 30 days. | 90 days fits one batched request. 30 days comfortably covers the portal's publication lag and corrections. |
 | D4 | Statistics **and** sensors. | A sensor cannot hold retroactive history; a statistic cannot drive automations or cards. |
 | D5 | Daily poll pinned to 02:00 local when the interval is the default (1440 min). | The previous day's readings are usually published by then; a fixed interval from HA start time would drift. |
@@ -33,7 +33,7 @@ untestable), YAML configuration, PyPI packaging.
 | D7 | Session cookies persisted in the config entry and refreshed after every poll. | This is what makes MFA a once-per-session event instead of once-per-poll, and what lets sessions survive restarts. |
 | D8 | Username and password stored in the config entry. | HA has no encrypted vault for integrations; `.storage` (mode 0600) is the standard. Storing the password means re-authentication needs only a new code. The password alone cannot open a session because the portal always demands a code. |
 | D9 | Re-authentication is HA's standard reauth flow: choose channel → enter code. | No custom notifications; the repair card is what users already know. |
-| D10 | Statistic rows stamped at 11:00 local; daily sensor is `VOLUME`/`MEASUREMENT`. | Both inherited from 1.x for continuity of stored data and recorder history (G5). |
+| D10 | Statistic rows are stamped at local midnight + *h* hours, computed in UTC; daily sensor is `VOLUME`/`MEASUREMENT`. | UTC arithmetic keeps the 24 rows distinct on daylight-saving days (wall-clock arithmetic would make two hours coincide when clocks go forward). Rows imported by 1.x sit at 11:00 local and are overwritten by hour 11 when their day is re-imported, so the running `sum` stays continuous. |
 | D11 | Config-entry `VERSION = 2`; 1.x entries are refused, not migrated. | 1.x entries hold Browserless settings and no session; there is nothing to migrate. Statistics are unaffected. |
 | D12 | Two test layers: the client offline with `aioresponses` (no Home Assistant needed) and the integration under `pytest-homeassistant-custom-component` with a scripted `FakeClient` and an in-memory recorder. Coverage is held at ≥ 95 % in CI; the integration declares the Platinum quality tier and tracks every rule in `quality_scale.yaml`. | The client is where the protocol risk is; the HA layer is where the statistics arithmetic and flow wiring can silently go wrong (the tests found an off-by-one bucket in the running-total lookup). |
 | D13 | Billing-account ID, meter record ID and meter serial are not entities and not on the device card. | They identify the customer's account; as entities they would be persisted in the recorder and appear in every state dump. They stay in the config entry (needed for API calls), are redacted from diagnostics, and are logged once at debug level on startup for checking. |
@@ -122,11 +122,13 @@ setup ──▶ login+MFA ──▶ cookies saved in entry.data
 
 - One external statistic, `sew_water:water_usage_mains`, `has_sum=True`, `mean_type=NONE`,
   `unit_class="volume"`, unit litres.
-- One row per day at **11:00 local** (`STATISTIC_HOUR`), `state` = that day's litres, `sum` =
-  running total.
+- One row per **hour**: start = UTC instant of local midnight + *h* hours (h = 0..23), `state` = that
+  hour's litres, `sum` = running total. On the 23-hour daylight-saving day the 24th reading, which
+  would land on the next day's midnight, is folded into hour 22's row. A day the portal returns
+  without hourly readings becomes a single midnight row carrying the day total.
 - Re-import rule: the running total is rebuilt from the newest row *before* the window
-  (`statistics_during_period`, looking back up to ten years), then each day in the window is written
-  with `async_add_external_statistics`. Rows are keyed by start time, so the import overwrites in
+  (`statistics_during_period`, hourly buckets, looking back up to ten years), then every hour in the
+  window is written with `async_add_external_statistics` (720 rows per daily poll, 2160 on first run). Rows are keyed by start time, so the import overwrites in
   place and stays consistent even when an earlier day inside the window changes.
 - First run is detected by the absence of any row (`get_last_statistics`), which is why an upgrade
   from 1.x takes the 30-day path rather than re-backfilling.
@@ -173,11 +175,12 @@ cookie round-trip; id discovery; usage summing, batching across 30-action pages,
 failure, and dead session; plus the protocol edge cases (missing MFA form, ViewState or buttons,
 malformed Aura contexts, HTTP 401/5xx, cookie flag round-trip, single-object usage payloads).
 
-`tests/ha/` (56 cases, `pytest-homeassistant-custom-component`, in-memory recorder, scripted
+`tests/ha/` (58 cases, `pytest-homeassistant-custom-component`, in-memory recorder, scripted
 `FakeClient`) covers: the config flow end to end (user → channel → code, every error and abort path,
 reauth with and without a password change, reconfigure, options); entry setup, retry, reauth trigger, unload,
 v1 refusal with its repair issue, and both services; the coordinator's 90-day backfill, 30-day trailing window, running-total
-arithmetic across re-imports, 02:00 scheduling and throttling back-off; the three sensors' values,
+arithmetic across re-imports, hourly row layout including the daylight-saving fold, 02:00 scheduling
+and throttling back-off; the three sensors' values,
 attributes, device grouping and unavailability; and diagnostics redaction.
 
 Coverage is 99 % overall and every module is above the 95 % threshold, enforced with

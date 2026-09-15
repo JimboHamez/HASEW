@@ -14,7 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.sew_water.const import ATTRIBUTION, DOMAIN, MANUFACTURER, SERVICE_FORCE_IMPORT
 from custom_components.sew_water.sew_client import SewConnectionError
 
-from .conftest import FakeClient
+from .conftest import BACKFILL_DAYS, FakeClient
 
 DAILY = "sensor.south_east_water_daily_usage"
 TOTAL = "sensor.south_east_water_total_usage"
@@ -58,8 +58,8 @@ async def test_daily_usage_reports_latest_day(hass: HomeAssistant, setup_integra
 async def test_total_usage_is_cumulative(hass: HomeAssistant, setup_integration: MockConfigEntry) -> None:
     state = hass.states.get(TOTAL)
     assert state is not None
-    # First run backfills 90 days at 240 L each.
-    assert float(state.state) == 90 * 240
+    # First run backfills BACKFILL_DAYS days at 240 L each.
+    assert float(state.state) == BACKFILL_DAYS * 240
     assert state.attributes["device_class"] == "water"
     assert state.attributes["state_class"] == "total_increasing"
 

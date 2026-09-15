@@ -17,8 +17,8 @@ Daily mains water usage from the [South East Water](https://my.southeastwater.co
 
 It gives you:
 
-- **Energy dashboard water** — one long-term statistic, `sew_water:water_usage_mains`, with a row for every day.
-- **Daily sensors** — yesterday's litres (with the 24 hourly readings as attributes), a running total and the reading date.
+- **Energy dashboard water** — one long-term statistic, `sew_water:water_usage_mains`, with a row for every **hour**, so the dashboard's hourly, daily, weekly and monthly views are all real.
+- **Sensors** — yesterday's litres (with the 24 hourly readings as attributes), a running total and the reading date.
 - **One login** — sign in once with your portal email, password and a one-time code; the session is kept and re-used, and survives restarts.
 - **Late data handled** — the portal publishes readings a day or two late and sometimes corrects them, so every poll re-imports the last 30 days.
 - **Painless re-login** — when the portal finally expires the session, Home Assistant's standard *Reauthentication required* card asks only for a new code.
@@ -159,7 +159,7 @@ To change your portal password, or to force a fresh login without waiting for th
 ## How it works
 
 - **Session reuse** — the cookies from the one login you did at setup are stored in the config entry and re-sent on every poll. Each successful poll writes the refreshed cookies back, so the session survives Home Assistant restarts.
-- **Trailing re-import** — every poll fetches the last 30 days in one batched request and re-imports them. Statistics rows are keyed by day, so re-importing overwrites in place: late-published days get filled in and corrections are applied without duplicates. The first poll after setup imports 90 days.
+- **Trailing re-import** — every poll fetches the last 30 days in one batched request and re-imports them as hourly statistics (24 rows per day). Rows are keyed by their start hour, so re-importing overwrites in place: late-published days get filled in and corrections are applied without duplicates. The first poll after setup imports 90 days.
 - **Statistics and sensors, not one or the other** — a sensor cannot carry retroactive history and a statistic cannot drive a card or an automation, so the integration keeps both. The statistic is the source of truth; the *Total usage* sensor mirrors its running total.
 - **02:00 local poll** — the previous day's readings are usually published by then. The next poll is always scheduled as "next 02:00" (plus a few random minutes so every installation doesn't hit the portal at the same second), so it never drifts. If the portal reports it is busy, the poll retries after 15 minutes rather than waiting a day.
 - **Zero days** — the portal returns 24 zeros both for an unpublished day and for a genuinely empty one. The *Daily usage* / *Last reading date* sensors skip zero days; statistics import them as 0 L and a later poll corrects them if data appears.
@@ -170,7 +170,7 @@ The protocol, the statistics rules and every design decision are in [DESIGN_DOCU
 
 *Settings → Dashboards → Energy → Water consumption → Add water source* and pick **`sew_water:water_usage_mains`**.
 
-> ⚠️ Use the statistic, not the `Total usage` sensor. The statistic has one row per day with the correct date, including back-filled and corrected days. The sensor only changes once per poll, so the dashboard would attribute a whole day's usage to the minute the poll ran.
+> ⚠️ Use the statistic, not the `Total usage` sensor. The statistic has one row per hour with the correct timestamp, including back-filled and corrected days. The sensor only changes once per poll, so the dashboard would attribute a whole day's usage to the minute the poll ran.
 
 ---
 
@@ -258,7 +258,8 @@ actions:
 ## Known limitations
 
 - **Data is a day or more behind.** The portal publishes a day's readings during the following day, sometimes later, and occasionally revises them. The integration polls at 02:00 and re-imports the last 30 days so gaps and corrections are filled in, but you will never see today's usage, and yesterday's may be zero until the following poll.
-- **Daily resolution in statistics.** Statistics are one row per day (stamped at midnight local time). Hourly readings are available only as an attribute of the *Daily usage* sensor for the most recent published day.
+- **Hourly is the finest resolution.** The portal publishes hourly readings, so that is what the statistic stores; there is no finer data. On the day daylight saving starts (23 hours), the portal's 24th reading is folded into the last hour of that day.
+- **History imported by earlier versions is daily.** Days imported before hourly statistics were introduced have a single row at 11:00; they are converted to hourly rows automatically as they fall inside the 30-day re-import window, or all at once with `sew_water.import_from_date`.
 - **One-time code on every login.** The portal offers no "remember this device". Setup, re-authentication and reconfigure each need a code; the integration keeps the session alive between polls so this is rare, but it cannot be avoided when the portal ends the session.
 - **One login, one meter.** If a portal login has several billing accounts or meters, only the first one returned by the portal is used. Mains water only — recycled-water meters are not read.
 - **Backfill on first setup is 90 days.** Use `sew_water.import_from_date` for anything earlier.

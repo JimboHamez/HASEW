@@ -33,7 +33,6 @@ from .const import (
     DOMAIN,
     POLL_HOUR,
     POLL_JITTER_MINUTES,
-    STATISTIC_HOUR,
     STATISTIC_ID_MAINS,
     TRAILING_WINDOW_DAYS,
 )
@@ -222,9 +221,34 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         return dt_util.as_local(dt_util.utc_from_timestamp(stats[0]["start"])).date()
 
     @staticmethod
-    def _row_start(day: date) -> datetime:
-        """Return the timestamp a day's statistic row is stored under."""
-        return dt_util.start_of_local_day(day) + timedelta(hours=STATISTIC_HOUR)
+    def _row_start(day: date, hour: int = 0) -> datetime:
+        """Return the UTC timestamp of the statistic row ``hour`` hours after local midnight of ``day``.
+
+        The offset is applied in UTC so every row is a distinct instant on daylight-saving days, where
+        wall-clock arithmetic would make two hours coincide or one vanish.
+        """
+        return dt_util.as_utc(dt_util.start_of_local_day(day)) + timedelta(hours=hour)
+
+    @classmethod
+    def _hourly_rows(cls, day: DailyUsage) -> list[tuple[datetime, float]]:
+        """Split a day into ``(row start, litres)`` pairs, one per hourly reading.
+
+        A day without hourly readings becomes a single midnight row carrying the day's total. On the
+        23-hour day when daylight saving starts, the reading that would land on the next day's midnight
+        is folded into the day's last row so the two days never share a row.
+        """
+        if not day.readings:
+            return [(cls._row_start(day.day), float(day.litres))]
+        next_midnight = cls._row_start(day.day + timedelta(days=1))
+        rows: list[tuple[datetime, float]] = []
+        for hour, litres in enumerate(day.readings):
+            start = cls._row_start(day.day, hour)
+            if start >= next_midnight and rows:
+                last_start, last_litres = rows[-1]
+                rows[-1] = (last_start, last_litres + litres)
+                continue
+            rows.append((start, float(litres)))
+        return rows
 
     async def _async_sum_before(self, day: date) -> float:
         """Return the running sum of the newest statistic row before ``day`` (0 if there is none)."""
@@ -246,10 +270,11 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         return float(stats[-1].get("sum") or 0.0)
 
     async def _async_import_statistics(self, usage: list[DailyUsage]) -> float:
-        """Write one statistic row per day and return the running total after the last day.
+        """Write one statistic row per hour and return the running total after the last day.
 
-        Rows are keyed by their start time, so re-importing a day simply overwrites it; the running
-        sum is rebuilt from the value recorded just before the window so corrections stay consistent.
+        Rows are keyed by their start time, so re-importing a day simply overwrites its hours; the
+        running sum is rebuilt from the value recorded just before the window so corrections stay
+        consistent.
         """
         if not usage:
             rows = await get_instance(self.hass).async_add_executor_job(
@@ -260,7 +285,8 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         running = await self._async_sum_before(usage[0].day)
         statistics: list[StatisticData] = []
         for day in usage:
-            running += day.litres
-            statistics.append(StatisticData(start=self._row_start(day.day), state=day.litres, sum=running))
+            for start, litres in self._hourly_rows(day):
+                running += litres
+                statistics.append(StatisticData(start=start, state=litres, sum=running))
         async_add_external_statistics(self.hass, self._metadata(), statistics)
         return running

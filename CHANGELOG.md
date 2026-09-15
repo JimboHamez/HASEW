@@ -22,6 +22,10 @@ All notable changes to this project are documented here. The format follows
 - `PARALLEL_UPDATES` declared on the sensor platform.
 
 ### Changed
+- Long-term statistics are now **hourly** (24 rows per day) instead of one row per day, so the
+  Energy dashboard's hourly view shows real usage. Days imported by earlier versions keep their single
+  11:00 row until they are re-imported (automatically within the 30-day window, or via
+  `sew_water.import_from_date`); the running total is unaffected.
 - *Last reading date* is now a diagnostic entity and disabled by default; the same date remains the
   `reading_date` attribute of *Daily usage*.
 

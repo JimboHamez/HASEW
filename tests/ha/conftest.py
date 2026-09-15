@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.sew_water import coordinator as coordinator_module
 from custom_components.sew_water.const import (
     CONF_BILLING_ACCOUNT_ID,
     CONF_COOKIES,
@@ -34,6 +35,9 @@ METER_SERIAL = "SAHL000000"
 COOKIES = [{"name": "sid", "value": "SESSION", "domain": "my.southeastwater.com.au", "path": "/"}]
 REFRESHED_COOKIES = [{"name": "sid", "value": "SESSION-2", "domain": "my.southeastwater.com.au", "path": "/"}]
 IDS = AccountIds(billing_account_id=BILLING_ACCOUNT_ID, meter_id=METER_ID, meter_serial=METER_SERIAL)
+# Import windows used in tests; the real 90/30-day windows would write thousands of hourly rows per test.
+BACKFILL_DAYS = 6
+TRAILING_WINDOW_DAYS = 3
 
 
 def usage_for(day: date, litres_per_hour: int = 10) -> DailyUsage:
@@ -139,6 +143,16 @@ def _ha_environment(recorder_mock: Recorder, enable_custom_integrations: None) -
 
     ``recorder_mock`` is listed first because its database fixture must be created before ``hass``.
     """
+
+
+@pytest.fixture(autouse=True)
+def _short_windows() -> Iterator[None]:
+    """Shrink the backfill and trailing windows so each test writes dozens of rows, not thousands."""
+    with (
+        patch.object(coordinator_module, "BACKFILL_DAYS", BACKFILL_DAYS),
+        patch.object(coordinator_module, "TRAILING_WINDOW_DAYS", TRAILING_WINDOW_DAYS),
+    ):
+        yield
 
 
 @pytest.fixture

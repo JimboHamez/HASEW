@@ -95,7 +95,7 @@ async def test_force_import_polls_now(
 async def test_import_from_date_fetches_requested_range(
     hass: HomeAssistant, setup_integration: MockConfigEntry, fake_client: FakeClient
 ) -> None:
-    start = dt_util.now().date() - timedelta(days=200)
+    start = dt_util.now().date() - timedelta(days=10)
     await hass.services.async_call(
         DOMAIN, SERVICE_IMPORT_FROM_DATE, {SERVICE_ATTR_START_DATE: start.isoformat()}, blocking=True
     )
