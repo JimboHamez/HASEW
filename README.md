@@ -35,16 +35,19 @@ This integration maps the portal's login, one-time code and usage requests to pl
 
 ---
 
-## 🆕 What's new in v2.0.0
+## 🆕 What's new in v2.0.0b2
 
-- **Pure-HTTP client** — talks to the portal directly; nothing to install alongside Home Assistant.
-- **One-time code setup** — the wizard walks through the portal's email or SMS code once; the session is stored, refreshed on every poll and survives restarts.
-- **Standard re-authentication** — when the session does expire, Home Assistant's *Reauthentication required* card asks only for a new code.
-- **Late data handled** — the poll runs at 02:00 local time and re-imports the last 30 days, so readings the portal publishes late or corrects are filled in automatically. The first poll imports 90 days.
-- **Throttling-aware** — if the portal reports it is busy the poll retries after 15 minutes instead of waiting a day.
-- **Platinum quality scale** — setup, re-authentication, reconfigure and options flows; repair issues; translated entity names, icons and error messages; diagnostics with credentials redacted; fully async and strictly typed; and a test suite covering the client and the integration end to end (99 % coverage, ≥ 95 % enforced in CI).
+**Second beta.** Three things you'll notice:
 
-Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/ha-sew-water/releases/tag/v2.0.0).
+- **Setup works on accounts other than the author's.** Billing-account and meter discovery now mirrors the portal's own calls; the previous guess returned no billing account against the live portal, so setup could fail right after the code was accepted.
+- **Hourly statistics.** `sew_water:water_usage_mains` now gets 24 rows per day instead of one, so the Energy dashboard's hourly view shows real usage. Days imported by b1 keep their single 11:00 row until they are re-imported — automatically within the 30-day window, or via `sew_water.import_from_date`.
+- **The session no longer expires between polls.** The portal drops an idle session after about 24 hours, which is longer than the daily poll gap only on paper. The home page is now loaded every 30 minutes to keep it alive, and a session that has died anyway triggers re-authentication immediately rather than at the next poll.
+
+Also: **Reconfigure** flow, a repair issue for 1.x entries, translated icons and error messages, `data_description` help on every setup field, *Last reading date* moved to a disabled-by-default diagnostic entity, and a fix for the running total skipping the first day of a re-imported window. The integration now records **Platinum** on the [quality scale](#home-assistant-quality-scale), backed by an integration-level test suite at 99 % coverage.
+
+Still from b1: pure-HTTP client (nothing to install), one-time code setup, standard re-authentication, 02:00 poll with a 30-day re-import window, throttling-aware retries.
+
+Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/ha-sew-water/releases/tag/v2.0.0b2).
 
 ---
 

@@ -3,7 +3,10 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.0.0b2] — 2026-09-15
+
+Second beta. Fixes account discovery against the live portal, keeps the session alive between polls,
+and stores statistics hourly. Reaches Platinum on the integration quality scale.
 
 ### Added
 - Integration quality scale declared as **Platinum** (`quality_scale.yaml`, `manifest.json`); every
