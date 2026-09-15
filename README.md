@@ -1,16 +1,16 @@
 # South East Water
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
-![GitHub Release](https://img.shields.io/github/v/release/JimboHamez/HASEW?style=for-the-badge)
-[![hacs_downloads](https://img.shields.io/github/downloads/JimboHamez/HASEW/latest/total?style=for-the-badge)](https://github.com/JimboHamez/HASEW/releases/latest)
-![GitHub License](https://img.shields.io/github/license/JimboHamez/HASEW?style=for-the-badge)
-![GitHub commit activity](https://img.shields.io/github/commit-activity/y/JimboHamez/HASEW?style=for-the-badge)
+![GitHub Release](https://img.shields.io/github/v/release/JimboHamez/ha-sew-water?style=for-the-badge)
+[![hacs_downloads](https://img.shields.io/github/downloads/JimboHamez/ha-sew-water/latest/total?style=for-the-badge)](https://github.com/JimboHamez/ha-sew-water/releases/latest)
+![GitHub License](https://img.shields.io/github/license/JimboHamez/ha-sew-water?style=for-the-badge)
+![GitHub commit activity](https://img.shields.io/github/commit-activity/y/JimboHamez/ha-sew-water?style=for-the-badge)
 ![Maintenance](https://img.shields.io/maintenance/yes/2026?style=for-the-badge)
 
-[![Tests](https://github.com/JimboHamez/HASEW/actions/workflows/test.yml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/test.yml)
-[![Validate](https://github.com/JimboHamez/HASEW/actions/workflows/validate.yaml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/validate.yaml)
-[![hassfest](https://github.com/JimboHamez/HASEW/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/hassfest.yaml)
-[![Security](https://github.com/JimboHamez/HASEW/actions/workflows/security.yml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/security.yml)
+[![Tests](https://github.com/JimboHamez/ha-sew-water/actions/workflows/test.yml/badge.svg)](https://github.com/JimboHamez/ha-sew-water/actions/workflows/test.yml)
+[![Validate](https://github.com/JimboHamez/ha-sew-water/actions/workflows/validate.yaml/badge.svg)](https://github.com/JimboHamez/ha-sew-water/actions/workflows/validate.yaml)
+[![hassfest](https://github.com/JimboHamez/ha-sew-water/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/JimboHamez/ha-sew-water/actions/workflows/hassfest.yaml)
+[![Security](https://github.com/JimboHamez/ha-sew-water/actions/workflows/security.yml/badge.svg)](https://github.com/JimboHamez/ha-sew-water/actions/workflows/security.yml)
 [![Quality Scale: Platinum](https://img.shields.io/badge/Quality%20Scale-Platinum-4E5D6C?style=flat&logo=home-assistant&logoColor=white)](custom_components/sew_water/quality_scale.yaml)
 
 Daily mains water usage from the [South East Water](https://my.southeastwater.com.au) customer portal, straight into Home Assistant.
@@ -44,7 +44,7 @@ This integration maps the portal's login, one-time code and usage requests to pl
 - **Throttling-aware** — if the portal reports it is busy the poll retries after 15 minutes instead of waiting a day.
 - **Platinum quality scale** — setup, re-authentication, reconfigure and options flows; repair issues; translated entity names, icons and error messages; diagnostics with credentials redacted; fully async and strictly typed; and a test suite covering the client and the integration end to end (99 % coverage, ≥ 95 % enforced in CI).
 
-Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/HASEW/releases/tag/v2.0.0).
+Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/ha-sew-water/releases/tag/v2.0.0).
 
 ---
 
@@ -76,7 +76,7 @@ Only needed if you want the water card on the Energy dashboard. Nothing to set u
 ### HACS (recommended)
 
 1. HACS → Integrations → ⋮ → **Custom repositories**.
-2. Add `https://github.com/JimboHamez/HASEW` as type **Integration**.
+2. Add `https://github.com/JimboHamez/ha-sew-water` as type **Integration**.
 3. Install **South East Water**.
 4. Restart Home Assistant.
 
