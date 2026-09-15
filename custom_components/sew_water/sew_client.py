@@ -39,6 +39,10 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://my.southeastwater.com.au"
 
 APEX_PORTAL_CLASSNAME = "cm_AccountBillingUsageAURA"
+# Field lists for the discovery queries. The portal asks for far more; these are the ones we use.
+BILLING_ACCOUNT_FIELDS = "Id, Name, Status__c, Property__c, Property__r.Digital_Meter__c"
+METER_FIELDS = "Id, Name, Is_Digital__c, Digital_Meter__c, Property__c"
+METER_DIGITAL_FILTER = "(Is_Digital__c = true OR Digital_Meter__c = true)"
 APEX_USAGE_CLASSNAME = "MysewUsageBillingGraphController"
 APEX_USAGE_METHOD = "getUsageData"
 AURA_APP_COMMUNITY = "siteforce:communityApp"
@@ -71,7 +75,6 @@ _MFA_ERROR_RE = re.compile(
     r"(?:incorrect|invalid|expired|try again|locked|too many|unable|failed)[^<]{0,120}",
     re.IGNORECASE,
 )
-_RECORD_ID_RE = re.compile(r"\b(a0[89][0-9A-Za-z]{15}|a1K[0-9A-Za-z]{15})\b")
 # Salesforce reports throttling as an Apex error message, not as an HTTP status.
 _BUSY_RE = re.compile(r"concurrent requests limit|request limit exceeded|too many requests", re.IGNORECASE)
 
@@ -304,20 +307,18 @@ def _retry_after_seconds(value: str | None) -> float | None:
         return None
 
 
-def _find_record_ids(obj: Any, prefix: str) -> list[str]:
-    """Return every Salesforce record ID with the given key prefix found anywhere in a JSON value."""
-    found: list[str] = []
-    stack: list[Any] = [obj]
-    while stack:
-        item = stack.pop()
-        if isinstance(item, dict):
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
-        elif isinstance(item, str):
-            found.extend(m for m in _RECORD_ID_RE.findall(item) if m.startswith(prefix))
-    # Preserve first-seen order while removing duplicates.
-    return list(dict.fromkeys(found))
+def _records(value: Any) -> list[dict[str, Any]]:
+    """Return the record list from an Apex return value, which arrives JSON-encoded as a string."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return []
+    if isinstance(value, dict):
+        value = value.get("records", [value])
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 class SewClient:
@@ -694,6 +695,10 @@ class SewClient:
     async def async_discover_ids(self) -> AccountIds:
         """Find the billing account and meter record IDs for the logged-in customer.
 
+        Mirrors the portal's own start-up calls: ``retrieveBillingAccounts`` gives the billing account
+        and its property; ``retrieveSObject`` on ``Meter_Details__c`` filtered by that property and the
+        digital-meter flags gives the meter. The first account and first digital meter are used.
+
         Returns:
             The IDs required by ``async_fetch_usage``.
 
@@ -705,35 +710,36 @@ class SewClient:
         accounts_action = {
             "callingDescriptor": "markup://c:PortalDataHub",
             "descriptor": f"apex://{APEX_PORTAL_CLASSNAME}/ACTION$retrieveBillingAccounts",
-            "params": {},
+            "params": {"fieldsToRetrieve": BILLING_ACCOUNT_FIELDS},
         }
         (result,) = await self._aura([accounts_action], context, token, HOME_PATH)
-        accounts = self._action_value(result)
-        billing_ids = _find_record_ids(accounts, "a08")
-        if not billing_ids:
+        accounts = _records(self._action_value(result))
+        account = next((a for a in accounts if isinstance(a.get("Id"), str)), None)
+        if account is None:
             raise SewProtocolError("No billing account found for this login")
-        billing_account_id = billing_ids[0]
+        billing_account_id = str(account["Id"])
+        property_id = account.get("Property__c")
+        if not isinstance(property_id, str) or not property_id:
+            raise SewProtocolError("Billing account has no property")
         meter_action = {
             "callingDescriptor": "markup://c:PortalDataHub",
             "descriptor": f"apex://{APEX_PORTAL_CLASSNAME}/ACTION$retrieveSObject",
             "params": {
-                "fieldsToRetrieve": "Id,Name",
+                "fieldsToRetrieve": METER_FIELDS,
                 "objectToReturn": "Meter_Details__c",
-                "whereClause": f"Billing_Account__c = '{billing_account_id}'",
+                "whereClause": f"Property__c IN ('{property_id}') AND {METER_DIGITAL_FILTER}",
             },
         }
         (result,) = await self._aura([meter_action], context, token, HOME_PATH)
-        meters = self._action_value(result)
-        meter_ids = _find_record_ids(meters, "a1K")
-        if not meter_ids:
-            raise SewProtocolError("No meter found for billing account")
-        serial = None
-        if isinstance(meters, list) and meters and isinstance(meters[0], dict):
-            serial = meters[0].get("Name")
+        meters = _records(self._action_value(result))
+        meter = next((m for m in meters if isinstance(m.get("Id"), str)), None)
+        if meter is None:
+            raise SewProtocolError("No digital meter found for the property")
+        serial = meter.get("Name")
         return AccountIds(
             billing_account_id=billing_account_id,
-            meter_id=meter_ids[0],
-            meter_serial=serial,
+            meter_id=str(meter["Id"]),
+            meter_serial=str(serial) if serial else None,
         )
 
     async def async_fetch_usage(self, ids: AccountIds, date_from: date, date_to: date) -> list[DailyUsage]:

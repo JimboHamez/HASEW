@@ -26,6 +26,9 @@ All notable changes to this project are documented here. The format follows
   `reading_date` attribute of *Daily usage*.
 
 ### Fixed
+- Account discovery now mirrors the portal's own calls (`retrieveBillingAccounts` with a field list,
+  then meters by property with the digital-meter filter) and decodes the JSON-string return values;
+  the previous guess returned no billing account against the live portal.
 - Running total could omit the first day of a re-imported window: the lookup for the last statistic
   before the window used day buckets, which swallowed that day's row. It now uses hourly buckets.
 

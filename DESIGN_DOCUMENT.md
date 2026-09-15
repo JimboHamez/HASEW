@@ -82,7 +82,7 @@ login flow for the one-time code.
 | 6 | `POST /PortalMFALoginFlow` with `otpHidden`, `otpBox1..6`, new ViewState×4, verify button | Success = `Location: /s/` header (the client also accepts `<meta name="Location">`). Failure = the same form again with an error span. |
 | 7 | `GET /s/` | Every HTML page load issues a fresh Aura CSRF token in a `__Host-ERIC_PROD-*` cookie; the page names that cookie in its `"eikoocnekot"` bootstrap setting. Context app is `siteforce:communityApp`. A dead session redirects to `/s/login/`. |
 | 8 | `POST /s/sfsites/aura` action `aura://ApexActionController/ACTION$execute`, class `MysewUsageBillingGraphController`, method `getUsageData`, params `{baId, meterId, dateFrom, dateTo, resolution:"hourly"}` | One action per day; 30 actions per POST (120 verified to work, 30 keeps each request under the 5 s long-running threshold, see D14). Returns `[{apiDate, readings[24], serialNo, message, status}]`; the client sums the 24 hourly litres. `resolution:"daily"` was never captured and is not used. |
-| 9 | ID discovery: `apex://cm_AccountBillingUsageAURA/ACTION$retrieveBillingAccounts` then `…$retrieveSObject` on `Meter_Details__c` | `baId`/`meterId` are Salesforce record ids (`a08…`, `a1K…`), not the account number or meter serial. **Built from notes, not captures – see §9.** |
+| 9 | ID discovery, mirroring the portal's own start-up calls: `apex://cm_AccountBillingUsageAURA/ACTION$retrieveBillingAccounts` with `fieldsToRetrieve` (we ask for `Id, Name, Status__c, Property__c, Property__r.Digital_Meter__c`) → first `Billing_Account__c`; then `…$retrieveSObject` with `objectToReturn=Meter_Details__c`, `fieldsToRetrieve=Id, Name, Is_Digital__c, Digital_Meter__c, Property__c`, `whereClause=Property__c IN ('<Property__c>') AND (Is_Digital__c = true OR Digital_Meter__c = true)` → first meter (`Name` is the serial). Both return values are JSON **strings** that must be decoded. | `baId`/`meterId` are Salesforce record ids (`a08…`, `a1K…`), not the account number or meter serial. The meter is linked to the *property*, not the billing account. Captured live 2026-09-15. |
 
 Every Aura POST sends `aura.context` (mode, app, fwuid, loaded), `aura.pageURI`, `aura.token` and the
 `message` JSON, form-encoded. Error mapping: `exceptionEvent` naming `invalidSession` → `SewAuthError`;
@@ -158,9 +158,8 @@ pushes the result to entities with `async_set_updated_data`.
 
 | Item | Status |
 |---|---|
-| Live verification of `async_discover_ids` (`retrieveBillingAccounts` params/response; the `Meter_Details__c` query's where-clause field). | Helpers ready in `/root/sew_probe/live_client_check.py` and `discover_capture.py`; run after the 10:45 UTC session cron on 2026-09-15. |
 | Wrong-code response text and whether the a4j redirect arrives as a header or a meta tag. | Client handles both forms; unverified which the portal uses. |
-| 24 h-idle session lifetime. | Daily cron measuring since 2026-09-14 10:43 UTC. Determines how often users will see the reauth card. |
+| Session idle timeout. | Measured: alive after 22 h with 30-min pings, **dead after 24 h idle** (2026-09-15). A staircase run (2 h / 4 h / 8 h / 12 h idle) is scheduled to find the exact value. Whatever it is, the 24 h + jitter poll gap is too long on its own — a keep-alive ping is needed. |
 | First end-to-end run in a real Home Assistant. | Pending a one-time code from the account owner. |
 
 ## 10. Testing
