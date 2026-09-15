@@ -11,6 +11,7 @@
 [![Validate](https://github.com/JimboHamez/HASEW/actions/workflows/validate.yaml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/validate.yaml)
 [![hassfest](https://github.com/JimboHamez/HASEW/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/hassfest.yaml)
 [![Security](https://github.com/JimboHamez/HASEW/actions/workflows/security.yml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/security.yml)
+[![Quality Scale: Silver](https://img.shields.io/badge/Quality%20Scale-Silver-C0C0C0?style=flat&logo=home-assistant&logoColor=white)](custom_components/sew_water/quality_scale.yaml)
 
 Daily mains water usage from the [South East Water](https://my.southeastwater.com.au) customer portal, straight into Home Assistant.
 
@@ -22,7 +23,7 @@ It gives you:
 - **Late data handled** — the portal publishes readings a day or two late and sometimes corrects them, so every poll re-imports the last 30 days.
 - **Painless re-login** — when the portal finally expires the session, Home Assistant's standard *Reauthentication required* card asks only for a new code.
 
-**No Browserless, no Chrome, no add-ons** — the integration talks to the portal directly over HTTPS.
+**Nothing else to install** — the integration talks to the portal directly over HTTPS; no add-ons, no browser automation, no extra Python packages.
 
 ---
 
@@ -30,19 +31,20 @@ It gives you:
 
 South East Water's digital meters report hourly usage to the customer portal, but the portal only shows it in a web page — there is no API, no export and no way to see it next to your other utilities in Home Assistant.
 
-The 1.x version of this integration drove the portal through a headless browser (Browserless). That worked until the portal made a one-time code mandatory on every login and changed how its pages bootstrap; the browser script could no longer find the session token, and every poll would have needed a fresh code anyway.
-
-Version 2 maps the whole login, code and usage flow to plain HTTP requests. Setup asks for the code once, the resulting session is kept and refreshed on every poll, and the browser dependency is gone. It is smaller, faster to poll and much easier to keep working.
+This integration maps the portal's login, one-time code and usage requests to plain HTTP. Setup asks for the code once, the resulting session is kept and refreshed on every poll, and each day's usage lands in Home Assistant's long-term statistics where the Energy dashboard can use it.
 
 ---
 
-## 🆕 What's new in v2.0.0b1
+## 🆕 What's new in v2.0.0
 
-**Beta.** The Browserless-based scraper is replaced by a pure-HTTP client. Setup now walks through the portal's one-time code (email or SMS), sessions are stored and re-used across polls and restarts, and re-authentication when a session expires is Home Assistant's standard reauth card. Polling runs at 02:00 local time and re-imports the last 30 days so late-published readings are filled in automatically.
+- **Pure-HTTP client** — talks to the portal directly; nothing to install alongside Home Assistant.
+- **One-time code setup** — the wizard walks through the portal's email or SMS code once; the session is stored, refreshed on every poll and survives restarts.
+- **Standard re-authentication** — when the session does expire, Home Assistant's *Reauthentication required* card asks only for a new code.
+- **Late data handled** — the poll runs at 02:00 local time and re-imports the last 30 days, so readings the portal publishes late or corrects are filled in automatically. The first poll imports 90 days.
+- **Throttling-aware** — if the portal reports it is busy the poll retries after 15 minutes instead of waiting a day.
+- **Silver quality scale** — config flow, reauth and options flows, diagnostics with credentials redacted, and a test suite covering the client and the integration end to end (99 % coverage, ≥ 95 % enforced in CI).
 
-**Upgrading?** 1.x config entries cannot be migrated — remove the old entry and add the integration again. Your existing `sew_water:water_usage_mains` statistics are kept and continue seamlessly. Yarra Valley Water and recycled-water support have been removed (see [Compatibility](#compatibility)).
-
-Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/HASEW/releases/tag/v2.0.0b1).
+Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/HASEW/releases/tag/v2.0.0).
 
 ---
 
@@ -148,7 +150,7 @@ If the portal rejects the saved password, an extra **Update password** step appe
 
 ## How it works
 
-- **Session reuse** — the cookies from the one login you did at setup are stored in the config entry and re-sent on every poll. Each successful poll writes the refreshed cookies back, so the session survives Home Assistant restarts and is not tied to a browser.
+- **Session reuse** — the cookies from the one login you did at setup are stored in the config entry and re-sent on every poll. Each successful poll writes the refreshed cookies back, so the session survives Home Assistant restarts.
 - **Trailing re-import** — every poll fetches the last 30 days in one batched request and re-imports them. Statistics rows are keyed by day, so re-importing overwrites in place: late-published days get filled in and corrections are applied without duplicates. The first poll after setup imports 90 days.
 - **Statistics and sensors, not one or the other** — a sensor cannot carry retroactive history and a statistic cannot drive a card or an automation, so the integration keeps both. The statistic is the source of truth; the *Total usage* sensor mirrors its running total.
 - **02:00 local poll** — the previous day's readings are usually published by then. The next poll is always scheduled as "next 02:00" (plus a few random minutes so every installation doesn't hit the portal at the same second), so it never drifts. If the portal reports it is busy, the poll retries after 15 minutes rather than waiting a day.
