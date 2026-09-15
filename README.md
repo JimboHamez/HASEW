@@ -6,12 +6,12 @@
 ![GitHub License](https://img.shields.io/github/license/JimboHamez/ha-sew-water?style=for-the-badge)
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/y/JimboHamez/ha-sew-water?style=for-the-badge)
 ![Maintenance](https://img.shields.io/maintenance/yes/2026?style=for-the-badge)
+[![HA quality scale](https://img.shields.io/badge/HA%20quality%20scale-platinum-E5E4E2?style=for-the-badge)](#home-assistant-quality-scale)
 
 [![Tests](https://github.com/JimboHamez/ha-sew-water/actions/workflows/test.yml/badge.svg)](https://github.com/JimboHamez/ha-sew-water/actions/workflows/test.yml)
 [![Validate](https://github.com/JimboHamez/ha-sew-water/actions/workflows/validate.yaml/badge.svg)](https://github.com/JimboHamez/ha-sew-water/actions/workflows/validate.yaml)
 [![hassfest](https://github.com/JimboHamez/ha-sew-water/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/JimboHamez/ha-sew-water/actions/workflows/hassfest.yaml)
 [![Security](https://github.com/JimboHamez/ha-sew-water/actions/workflows/security.yml/badge.svg)](https://github.com/JimboHamez/ha-sew-water/actions/workflows/security.yml)
-[![Quality Scale: Platinum](https://img.shields.io/badge/Quality%20Scale-Platinum-4E5D6C?style=flat&logo=home-assistant&logoColor=white)](custom_components/sew_water/quality_scale.yaml)
 
 Daily mains water usage from the [South East Water](https://my.southeastwater.com.au) customer portal, straight into Home Assistant.
 
@@ -313,9 +313,29 @@ Full list in [DESIGN_DOCUMENT.md → Open items](DESIGN_DOCUMENT.md#9-open-items
 | Python | 3.13 (as shipped with Home Assistant) |
 | Runtime dependencies | `aiohttp` (ships with Home Assistant) |
 | Utility | South East Water only (mains water) |
-| Quality scale | Platinum (self-assessed against the [integration quality scale](https://developers.home-assistant.io/docs/core/integration-quality-scale); see [`quality_scale.yaml`](custom_components/sew_water/quality_scale.yaml)) |
+| Quality scale | Platinum, self-assessed — see [Home Assistant quality scale](#home-assistant-quality-scale) |
 
 Credentials are stored in the config entry — Home Assistant's private `.storage`, the same place every integration keeps its secrets. They are never logged and are redacted from diagnostics. Because the portal demands a one-time code on every login, the stored password alone cannot open a new session; it only saves you retyping it during re-authentication.
+
+---
+
+## Home Assistant quality scale
+
+This integration is measured against Home Assistant's [Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/checklist) — the checklist core integrations are held to, covering setup, entity naming, documentation, typing and test coverage. The rule-by-rule record is in [`quality_scale.yaml`](custom_components/sew_water/quality_scale.yaml).
+
+**This is a self-assessment, not an awarded tier.** The quality scale is a programme for integrations that ship inside Home Assistant Core; a custom/HACS integration like this one is not eligible for an official rating. The badge reports our own audit against the published rules, so you can see what has and hasn't been done rather than take "custom integration" on trust.
+
+**Bronze — all 17 applicable rules pass.** Setup runs entirely through the UI, `config_flow.py` is fully covered by tests, entities carry unique IDs and take their names from translations, the coordinator lives on `entry.runtime_data`, both actions (`force_import` and `import_from_date`) are registered at startup, and the portal login is exercised before an entry is created and again before setup completes. Three Bronze rules don't apply: `docs-triggers` and `docs-conditions` (this integration provides neither), and `entity-event-setup` (entities read the coordinator and subscribe to nothing else).
+
+**Silver — all 10 rules pass.** The config entry unloads cleanly, every entity goes *unavailable* when a poll fails and comes back when the next one succeeds, the coordinator logs an outage once rather than every cycle, both actions raise a translated error instead of failing silently, `PARALLEL_UPDATES` is declared, and an expired portal session raises `ConfigEntryAuthFailed` so Home Assistant's standard *Reauthentication required* card asks for a new one-time code. Test coverage sits at 99% against the required 95%, which CI enforces.
+
+**Gold — all 18 applicable rules pass.** The meter is a device, a diagnostics download (credentials, session cookies and account identifiers redacted) is available from the integration page, the wizard can be re-run against an existing entry via **Reconfigure**, entity names, icons and error messages come from translations, the reading-date sensor is a disabled-by-default diagnostic entity, a repair issue is raised for a version 1 entry that cannot be migrated, and the docs carry use cases, examples, troubleshooting and a known-limitations list.
+
+Four Gold rules don't apply, all for the same reason: one config entry is one portal login with one meter. `discovery` and `discovery-update-info` assume something on the local network to find, and this is a cloud service; `dynamic-devices` and `stale-devices` assume devices can appear or disappear after setup, and here the only device is created with the entry and removed with it.
+
+**Platinum — all three rules pass.** `strict-typing`: `mypy --strict` is clean across the package (checked in CI) and a `py.typed` marker ships with it. `async-dependency` and `inject-websession`: the portal client is `aiohttp` throughout with no blocking I/O, and it owns no network resources — the config flow and the coordinator each hand it a session created through Home Assistant's `async_create_clientsession`, with a dedicated cookie jar so the portal's session cookies never mix with other integrations'.
+
+One thing worth stating plainly: those two rules assume the API code lives in a **separate published library** declared in `manifest.json` `requirements`, and here it lives in-component as `sew_client.py`. That split is deliberate. The rule exists so Home Assistant Core can version a dependency independently of the integration that uses it; this integration ships as one unit through HACS, and the client exists for exactly one portal with no other consumer. Splitting it would buy a second repository, a second release cadence and a version-compatibility surface between them, in exchange for nothing a user would notice.
 
 ---
 
