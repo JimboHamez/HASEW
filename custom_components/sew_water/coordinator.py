@@ -218,7 +218,9 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
             row_start - timedelta(days=LOOKBACK_DAYS),
             row_start,
             {STATISTIC_ID_MAINS},
-            "day",
+            # Hourly buckets so the cut-off is exact: a day bucket would start at midnight and swallow
+            # the first row of the window itself.
+            "hour",
             None,
             {"sum"},
         )

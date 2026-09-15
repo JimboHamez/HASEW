@@ -211,6 +211,7 @@ Full list in [DESIGN_DOCUMENT.md → Open items](DESIGN_DOCUMENT.md#9-open-items
 | Python | 3.13 (as shipped with Home Assistant) |
 | Runtime dependencies | `aiohttp` (ships with Home Assistant) |
 | Utility | South East Water only (mains water) |
+| Quality scale | Silver (self-assessed against the [integration quality scale](https://developers.home-assistant.io/docs/core/integration-quality-scale); see [`quality_scale.yaml`](custom_components/sew_water/quality_scale.yaml)) |
 
 Credentials are stored in the config entry — Home Assistant's private `.storage`, the same place every integration keeps its secrets. They are never logged and are redacted from diagnostics. Because the portal demands a one-time code on every login, the stored password alone cannot open a new session; it only saves you retyping it during re-authentication.
 

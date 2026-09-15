@@ -35,7 +35,7 @@ untestable), YAML configuration, PyPI packaging.
 | D9 | Re-authentication is HA's standard reauth flow: choose channel → enter code. | No custom notifications; the repair card is what users already know. |
 | D10 | Statistic rows stamped at 11:00 local; daily sensor is `VOLUME`/`MEASUREMENT`. | Both inherited from 1.x for continuity of stored data and recorder history (G5). |
 | D11 | Config-entry `VERSION = 2`; 1.x entries are refused, not migrated. | 1.x entries hold Browserless settings and no session; there is nothing to migrate. Statistics are unaffected. |
-| D12 | Tests cover the client only (offline, `aioresponses`). HA-level tests deferred. | The client is where the risk is; HA plumbing is thin and follows core patterns. |
+| D12 | Two test layers: the client offline with `aioresponses` (no Home Assistant needed) and the integration under `pytest-homeassistant-custom-component` with a scripted `FakeClient` and an in-memory recorder. Coverage is held at ≥ 95 % in CI; the integration declares the Silver quality tier and tracks every rule in `quality_scale.yaml`. | The client is where the protocol risk is; the HA layer is where the statistics arithmetic and flow wiring can silently go wrong (the tests found an off-by-one bucket in the running-total lookup). |
 | D13 | Billing-account ID, meter record ID and meter serial are not entities and not on the device card. | They identify the customer's account; as entities they would be persisted in the recorder and appear in every state dump. They stay in the config entry (needed for API calls), are redacted from diagnostics, and are logged once at debug level on startup for checking. |
 | D14 | Throttling is detected from Salesforce's Apex error text ("concurrent requests limit exceeded"), plus HTTP 429/503 with `Retry-After` for good measure, and surfaced as `SewBusyError` → `UpdateFailed(retry_after=15 min)`. Usage batches are 30 actions and the daily poll carries up to 10 min of random jitter. | The core Salesforce platform does not use 429 for Aura requests; the limit that applies is the org-wide cap of 10 synchronous Apex requests running > 5 s, shared by every portal user. Keeping each batch under ~3 s stays out of that pool, jitter avoids installations colliding, and a short retry beats waiting for the next day. |
 | D15 | `clientOutOfSync` reloads the home page for a fresh Aura context and retries once. | It means the cached `fwuid` is stale after a Salesforce release, not that the session is dead; treating it as an auth failure would demand a needless one-time code. |
@@ -162,17 +162,27 @@ pushes the result to entities with `async_set_updated_data`.
 | Wrong-code response text and whether the a4j redirect arrives as a header or a meta tag. | Client handles both forms; unverified which the portal uses. |
 | 24 h-idle session lifetime. | Daily cron measuring since 2026-09-14 10:43 UTC. Determines how often users will see the reauth card. |
 | First end-to-end run in a real Home Assistant. | Pending a one-time code from the account owner. |
-| HA-level tests (`pytest-homeassistant-custom-component`). | Deferred (D12). |
 
 ## 10. Testing
 
-`tests/test_sew_client.py` (33 cases, offline, `aioresponses`) covers: login success / bad
+`tests/test_sew_client.py` (51 cases, offline, `aioresponses`) covers: login success / bad
 credentials / no-MFA / maintenance page / 5xx / network failure; MFA field names, ViewState carry-
 forward, wrong code with retry, code length, step ordering; session alive / dead / token-less and
 cookie round-trip; id discovery; usage summing, batching across 30-action pages, unavailable days,
 `invalidSession`, action errors and non-JSON responses; throttling via Apex error text, HTTP 429 with
 `Retry-After`, 503 with an unparseable `Retry-After`; `clientOutOfSync` resync success, repeated
-failure, and dead session.
+failure, and dead session; plus the protocol edge cases (missing MFA form, ViewState or buttons,
+malformed Aura contexts, HTTP 401/5xx, cookie flag round-trip, single-object usage payloads).
+
+`tests/ha/` (51 cases, `pytest-homeassistant-custom-component`, in-memory recorder, scripted
+`FakeClient`) covers: the config flow end to end (user → channel → code, every error and abort path,
+reauth with and without a password change, options); entry setup, retry, reauth trigger, unload,
+v1 refusal and both services; the coordinator's 90-day backfill, 30-day trailing window, running-total
+arithmetic across re-imports, 02:00 scheduling and throttling back-off; the three sensors' values,
+attributes, device grouping and unavailability; and diagnostics redaction.
+
+Coverage is 99 % overall and every module is above the 95 % Silver threshold, enforced with
+`--cov-fail-under=95` in CI.
 
 Tooling: `ruff` (120 columns, Google docstrings, HA import order), `mypy --strict`, `pytest` with
 `asyncio_mode = auto`. Configuration in `pyproject.toml`.

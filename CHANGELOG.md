@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- Integration quality scale declared as **Silver** (`quality_scale.yaml`, `manifest.json`).
+- Integration-level test suite (`tests/ha/`, `pytest-homeassistant-custom-component`) covering the
+  config flow, setup/unload, services, coordinator, sensors and diagnostics. Coverage is 99 % and
+  CI fails below 95 %.
+- `data_description` help text on every setup, reauth and options field.
+- `PARALLEL_UPDATES` declared on the sensor platform.
+
+### Fixed
+- Running total could omit the first day of a re-imported window: the lookup for the last statistic
+  before the window used day buckets, which swallowed that day's row. It now uses hourly buckets.
+
 ## [2.0.0b1] — 2026-09-14
 
 First beta of the pure-HTTP rewrite. Live-verified against the portal for login, MFA, session reuse

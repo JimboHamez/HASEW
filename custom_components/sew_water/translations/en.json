@@ -7,6 +7,10 @@
         "data": {
           "username": "Email address",
           "password": "Password"
+        },
+        "data_description": {
+          "username": "The email address you sign in to my.southeastwater.com.au with.",
+          "password": "Your portal password. It is stored in Home Assistant so re-authentication only needs a new code."
         }
       },
       "mfa_channel": {
@@ -14,6 +18,9 @@
         "description": "South East Water requires a one-time code for every new login. Choose how to receive it.",
         "data": {
           "mfa_channel": "Send code by"
+        },
+        "data_description": {
+          "mfa_channel": "The portal sends the code to the email address or mobile number on your account."
         }
       },
       "mfa_code": {
@@ -21,6 +28,9 @@
         "description": "Type the 6-digit code South East Water just sent you.",
         "data": {
           "mfa_code": "One-time code"
+        },
+        "data_description": {
+          "mfa_code": "Six digits; spaces and dashes are ignored."
         }
       },
       "reauth_confirm": {
@@ -33,6 +43,9 @@
         "description": "The saved password for {username} was rejected. Enter the current password to continue.",
         "data": {
           "password": "Password"
+        },
+        "data_description": {
+          "password": "The password you now use for the portal."
         }
       }
     },

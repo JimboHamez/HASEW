@@ -23,8 +23,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements_test.txt
       - name: Run tests
-        # The client tests are offline (aioresponses) and need no Home Assistant install.
-        run: pytest -q
+        # Client tests are offline (aioresponses); the tests/ha suite runs against the Home Assistant
+        # that pytest-homeassistant-custom-component pulls in. Silver requires >= 95% coverage.
+        run: pytest -q -p no:logging --cov=custom_components/sew_water --cov-report=term-missing --cov-fail-under=95
 
   ruff:
     name: ruff

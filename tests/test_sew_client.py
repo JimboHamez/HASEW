@@ -35,6 +35,7 @@ from .conftest import (
     VIEWSTATE_1,
     VIEWSTATE_2,
     aura_envelope,
+    aura_script_tag,
     home_headers,
     home_page,
     login_page,
@@ -484,3 +485,184 @@ async def test_client_out_of_sync_with_dead_session_is_auth_error(client: SewCli
     mock_dead_home(mocked)
     with pytest.raises(SewAuthError):
         await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+
+
+# ------------------------------------------------------------------------- edge cases
+
+
+def test_session_property_exposes_injected_session(session: aiohttp.ClientSession, client: SewClient) -> None:
+    assert client.session is session
+
+
+async def test_login_follows_relative_frontdoor_and_rejects_unknown_page(
+    client: SewClient, mocked: aioresponses
+) -> None:
+    mocked.get(f"{BASE}/s/login/", status=200, body=login_page())
+    mocked.post(AURA_URL, status=200, payload=aura_envelope("/secur/frontdoor.jsp?sid=FAKE-SID&retURL=%2F"))
+    mocked.get(FRONTDOOR, status=302, headers={"Location": f"{BASE}/s/somewhere-else"})
+    mocked.get(f"{BASE}/s/somewhere-else", status=200, body="<html></html>")
+    with pytest.raises(SewProtocolError, match="Unexpected page after login"):
+        await client.async_login("user@example.com", "hunter2")
+
+
+async def test_login_page_skips_malformed_and_foreign_contexts(client: SewClient, mocked: aioresponses) -> None:
+    """Broken or unrelated bootstrap URLs are skipped and the right app's context is still found."""
+    page = (
+        '<html><head><script src="/s/sfsites/l/%7Bnot-json/bootstrap.js"></script>'
+        '<script src="/s/sfsites/l/%7B%22mode%22%3A%22PROD%22%7D/bootstrap.js"></script>'
+        f"{aura_script_tag('siteforce:communityApp', FWUID_HOME, HASH_HOME)}"
+        f"{login_page()}"
+    )
+    mocked.get(f"{BASE}/s/login/", status=200, body=page)
+    mocked.post(AURA_URL, status=200, payload=aura_envelope("Your login attempt has failed. Please try again."))
+    with pytest.raises(SewAuthError):
+        await client.async_login("user@example.com", "wrong")
+    context = json.loads(posted_form(mocked, "/s/sfsites/aura")["aura.context"])
+    assert context["fwuid"] == FWUID_LOGIN
+
+
+async def test_aura_401_is_auth_error(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    mocked.post(AURA_URL, status=401, body="")
+    with pytest.raises(SewAuthError, match="no longer valid"):
+        await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+
+
+async def test_aura_other_exception_event_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    payload = {"exceptionEvent": True, "event": {"descriptor": "markup://aura:systemError"}, "message": "boom"}
+    mocked.post(AURA_URL, status=200, payload=payload)
+    with pytest.raises(SewProtocolError, match="systemError"):
+        await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+
+
+async def test_aura_wrong_action_count_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    mocked.post(AURA_URL, status=200, payload=aura_envelope(usage_day("2026-09-13", [1] * 24)))
+    with pytest.raises(SewProtocolError, match="unexpected number of actions"):
+        await client.async_fetch_usage(IDS, date(2026, 9, 12), date(2026, 9, 13))
+
+
+async def test_mfa_page_without_form_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    mocked.get(f"{BASE}/s/login/", status=200, body=login_page())
+    mocked.post(AURA_URL, status=200, payload=aura_envelope(FRONTDOOR))
+    mocked.get(FRONTDOOR, status=302, headers={"Location": f"{BASE}/apex/PortalMFALoginFlow?retURL=%2F"})
+    mocked.get(f"{BASE}/apex/PortalMFALoginFlow?retURL=%2F", status=200, body="<html><body>nothing</body></html>")
+    with pytest.raises(SewProtocolError, match="MFA form not found"):
+        await client.async_login("user@example.com", "hunter2")
+
+
+async def test_mfa_form_without_viewstate_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    page = re.sub(r'<input type="hidden" name="com\.salesforce[^>]*/>', "", mfa_channel_page())
+    mocked.get(f"{BASE}/s/login/", status=200, body=login_page())
+    mocked.post(AURA_URL, status=200, payload=aura_envelope(FRONTDOOR))
+    mocked.get(FRONTDOOR, status=302, headers={"Location": f"{BASE}/apex/PortalMFALoginFlow?retURL=%2F"})
+    mocked.get(f"{BASE}/apex/PortalMFALoginFlow?retURL=%2F", status=200, body=page)
+    with pytest.raises(SewProtocolError, match="no ViewState"):
+        await client.async_login("user@example.com", "hunter2")
+
+
+async def test_mfa_form_without_send_button_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    page = (
+        mfa_channel_page()
+        .replace('value="Send code"', 'value="Continue"')
+        .replace("<form", '<input type="text" /><form')
+    )
+    mocked.get(f"{BASE}/s/login/", status=200, body=login_page())
+    mocked.post(AURA_URL, status=200, payload=aura_envelope(FRONTDOOR))
+    mocked.get(FRONTDOOR, status=302, headers={"Location": f"{BASE}/apex/PortalMFALoginFlow?retURL=%2F"})
+    mocked.get(f"{BASE}/apex/PortalMFALoginFlow?retURL=%2F", status=200, body=page)
+    await client.async_login("user@example.com", "hunter2")
+    with pytest.raises(SewProtocolError, match="Send-code button"):
+        await client.async_request_code("Email")
+
+
+async def test_request_code_without_otp_boxes_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    await login_to_mfa(client, mocked)
+    mocked.post(f"{BASE}/PortalMFALoginFlow", status=200, body=mfa_channel_page(), content_type="text/xml")
+    with pytest.raises(SewProtocolError, match="code entry form"):
+        await client.async_request_code("Email")
+
+
+async def test_mfa_post_non_200_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    await login_to_mfa(client, mocked)
+    mocked.post(f"{BASE}/PortalMFALoginFlow", status=404, body="gone")
+    with pytest.raises(SewProtocolError, match="HTTP 404"):
+        await client.async_request_code("Email")
+
+
+async def test_submit_code_without_verify_button_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    await login_to_mfa(client, mocked)
+    page = mfa_code_page().replace('value="Verify"', 'value="Submit"')
+    mocked.post(f"{BASE}/PortalMFALoginFlow", status=200, body=page, content_type="text/xml")
+    await client.async_request_code("Email")
+    with pytest.raises(SewProtocolError, match="Verify button"):
+        await client.async_submit_code("123456")
+
+
+async def test_submit_code_accepted_but_home_dead_is_auth_error(client: SewClient, mocked: aioresponses) -> None:
+    await login_to_mfa(client, mocked)
+    mocked.post(f"{BASE}/PortalMFALoginFlow", status=200, body=mfa_code_page(), content_type="text/xml")
+    await client.async_request_code("Email")
+    mocked.post(f"{BASE}/PortalMFALoginFlow", status=200, headers={"Location": f"{BASE}/s/"}, body="")
+    mock_dead_home(mocked)
+    with pytest.raises(SewAuthError, match="did not accept the code"):
+        await client.async_submit_code("123456")
+
+
+async def test_import_cookies_restores_flags_and_domain_cookies(
+    session: aiohttp.ClientSession, client: SewClient
+) -> None:
+    client.import_cookies(
+        [
+            {
+                "name": "sid",
+                "value": "S",
+                "domain": ".southeastwater.com.au",
+                "path": "/",
+                "secure": True,
+                "httponly": True,
+                "expires": "Wed, 01 Jan 2030 00:00:00 GMT",
+            },
+            {"name": "plain", "value": "P"},
+        ]
+    )
+    jar = session.cookie_jar.filter_cookies(URL(f"{BASE}/s/"))
+    assert jar["sid"].value == "S"
+    assert jar["plain"].value == "P"
+    exported = {c["name"]: c for c in client.export_cookies()}
+    assert exported["sid"]["secure"] is True
+    assert exported["sid"]["httponly"] is True
+    assert exported["sid"]["expires"]
+
+
+async def test_discover_ids_without_meter_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    mock_home(mocked)
+    mocked.post(AURA_URL, status=200, payload=aura_envelope([{"Id": BILLING_ACCOUNT_ID}]))
+    mocked.post(AURA_URL, status=200, payload=aura_envelope([]))
+    with pytest.raises(SewProtocolError, match="No meter found"):
+        await client.async_discover_ids()
+
+
+async def test_fetch_usage_accepts_single_object_return_value(client: SewClient, mocked: aioresponses) -> None:
+    single = usage_day("2026-09-13", [2] * 24)
+    single["returnValue"] = single["returnValue"][0]
+    mock_home(mocked)
+    mocked.post(AURA_URL, status=200, payload=aura_envelope(single))
+    (usage,) = await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+    assert usage.litres == 48
+
+
+async def test_fetch_usage_non_list_readings_is_protocol_error(client: SewClient, mocked: aioresponses) -> None:
+    bad = usage_day("2026-09-13", None)
+    bad["returnValue"][0]["readings"] = "n/a"
+    mock_home(mocked)
+    mocked.post(AURA_URL, status=200, payload=aura_envelope(bad))
+    with pytest.raises(SewProtocolError, match="Unexpected readings"):
+        await client.async_fetch_usage(IDS, date(2026, 9, 13), date(2026, 9, 13))
+
+
+async def test_bad_gateway_is_connection_error(client: SewClient, mocked: aioresponses) -> None:
+    mocked.get(f"{BASE}/s/login/", status=502, body="bad gateway")
+    with pytest.raises(SewConnectionError, match="502"):
+        await client.async_login("user@example.com", "hunter2")
