@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import date, timedelta
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from homeassistant.components.recorder import Recorder
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
@@ -139,6 +139,17 @@ def _ha_environment(recorder_mock: Recorder, enable_custom_integrations: None) -
 
     ``recorder_mock`` is listed first because its database fixture must be created before ``hass``.
     """
+
+
+@pytest.fixture
+def entity_registry_enabled_by_default() -> Iterator[None]:
+    """Enable entities the integration disables by default, as Home Assistant's own test suite does."""
+    with patch(
+        "homeassistant.helpers.entity.Entity.entity_registry_enabled_default",
+        new_callable=PropertyMock,
+        return_value=True,
+    ):
+        yield
 
 
 @pytest.fixture

@@ -153,18 +153,35 @@ class SewCoordinator(DataUpdateCoordinator[SewData]):
         """
         try:
             if not await self.client.async_is_alive():
-                raise ConfigEntryAuthFailed("Portal session expired; a new login code is required")
+                raise ConfigEntryAuthFailed(translation_domain=DOMAIN, translation_key="session_expired")
             usage = await self.client.async_fetch_usage(self.ids, start, end)
         except SewAuthError as err:
-            raise ConfigEntryAuthFailed(str(err)) from err
+            raise ConfigEntryAuthFailed(
+                translation_domain=DOMAIN,
+                translation_key="session_rejected",
+                translation_placeholders={"error": str(err)},
+            ) from err
         except SewBusyError as err:
             # Salesforce throttles with an Apex error rather than a 429; back off briefly instead of
             # waiting for the next daily poll.
-            raise UpdateFailed(str(err), retry_after=err.retry_after or BUSY_RETRY_SECONDS) from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="portal_busy",
+                translation_placeholders={"error": str(err)},
+                retry_after=err.retry_after or BUSY_RETRY_SECONDS,
+            ) from err
         except SewConnectionError as err:
-            raise UpdateFailed(f"Cannot reach the portal: {err}") from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="cannot_connect",
+                translation_placeholders={"error": str(err)},
+            ) from err
         except SewProtocolError as err:
-            raise UpdateFailed(f"Unexpected portal response: {err}") from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="unexpected_response",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
         self._async_store_cookies()
         total = await self._async_import_statistics(usage)

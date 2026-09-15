@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.typing import ConfigType
 import voluptuous as vol
@@ -57,7 +57,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             except ValueError as err:
                 raise ServiceValidationError(translation_domain=DOMAIN, translation_key="start_in_future") from err
             except HomeAssistantError as err:
-                raise HomeAssistantError(f"Import failed: {err}") from err
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="import_failed",
+                    translation_placeholders={"error": str(err)},
+                ) from err
 
     hass.services.async_register(DOMAIN, SERVICE_FORCE_IMPORT, _force_import)
     hass.services.async_register(DOMAIN, SERVICE_IMPORT_FROM_DATE, _import_from_date, schema=IMPORT_FROM_DATE_SCHEMA)
@@ -95,8 +99,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: SewConfigEntry) -> bool
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Refuse to migrate entries from the Browserless-based version; they must be set up again."""
+    """Refuse to migrate version 1 entries; they hold no session and must be set up again."""
     if entry.version < 2:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"v1_entry_{entry.entry_id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="v1_entry",
+            translation_placeholders={"title": entry.title},
+        )
         _LOGGER.error("Config entries from version 1 cannot be migrated; remove the integration and add it again")
         return False
     return True

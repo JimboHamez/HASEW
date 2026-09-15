@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 import pytest
@@ -66,12 +67,21 @@ async def test_setup_starts_reauth_when_session_dead(
     assert flows[0]["context"]["source"] == "reauth"
 
 
-async def test_v1_entry_is_refused(hass: HomeAssistant, fake_client: FakeClient) -> None:
-    entry = MockConfigEntry(domain=DOMAIN, version=1, data={"browserless_url": "http://x:3000"})
+async def test_v1_entry_is_refused_with_repair_issue(
+    hass: HomeAssistant, fake_client: FakeClient, issue_registry: ir.IssueRegistry
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="old@example.com", version=1, data={"browserless_url": "http://x:3000"}
+    )
     entry.add_to_hass(hass)
     assert not await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.MIGRATION_ERROR
+    issue = issue_registry.async_get_issue(DOMAIN, f"v1_entry_{entry.entry_id}")
+    assert issue is not None
+    assert issue.severity is ir.IssueSeverity.ERROR
+    assert not issue.is_fixable
+    assert issue.translation_placeholders == {"title": "old@example.com"}
 
 
 async def test_force_import_polls_now(
@@ -105,10 +115,11 @@ async def test_import_from_date_reports_portal_failure(
     hass: HomeAssistant, setup_integration: MockConfigEntry, fake_client: FakeClient
 ) -> None:
     fake_client.fetch_error = SewConnectionError("down")
-    with pytest.raises(HomeAssistantError, match="Import failed"):
+    with pytest.raises(HomeAssistantError, match="Import failed") as excinfo:
         await hass.services.async_call(
             DOMAIN, SERVICE_IMPORT_FROM_DATE, {SERVICE_ATTR_START_DATE: date(2026, 1, 1).isoformat()}, blocking=True
         )
+    assert excinfo.value.translation_key == "import_failed"
 
 
 async def test_services_without_entries_raise(hass: HomeAssistant, fake_client: FakeClient) -> None:

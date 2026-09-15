@@ -7,7 +7,13 @@ import logging
 from typing import Any
 
 import aiohttp
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
@@ -41,14 +47,12 @@ from .sew_client import SewAuthError, SewClient, SewConnectionError, SewError
 
 _LOGGER = logging.getLogger(__name__)
 
+USERNAME_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username"))
+PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="current-password"))
 STEP_USER_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_USERNAME): TextSelector(
-            TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username")
-        ),
-        vol.Required(CONF_PASSWORD): TextSelector(
-            TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="current-password")
-        ),
+        vol.Required(CONF_USERNAME): USERNAME_SELECTOR,
+        vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
     }
 )
 STEP_CODE_SCHEMA = vol.Schema(
@@ -147,6 +151,9 @@ class SewConfigFlow(ConfigFlow, domain=DOMAIN):
         if self.source == SOURCE_REAUTH:
             self._abort_if_unique_id_mismatch(reason="wrong_account")
             return self.async_update_reload_and_abort(self._get_reauth_entry(), data_updates=session_data)
+        if self.source == SOURCE_RECONFIGURE:
+            self._abort_if_unique_id_mismatch(reason="wrong_account")
+            return self.async_update_reload_and_abort(self._get_reconfigure_entry(), data_updates=session_data)
         self._abort_if_unique_id_configured()
         return self.async_create_entry(title=self._username, data=session_data)
 
@@ -208,6 +215,23 @@ class SewConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 return await self._async_finish()
         return self.async_show_form(step_id="mfa_code", data_schema=STEP_CODE_SCHEMA, errors=errors)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Sign in again with possibly changed credentials and replace the stored session."""
+        errors: dict[str, str] = {}
+        entry = self._get_reconfigure_entry()
+        if user_input is not None:
+            self._username = user_input[CONF_USERNAME].strip()
+            self._password = user_input[CONF_PASSWORD]
+            if (result := await self._async_login(errors)) is not None:
+                return result
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_USERNAME, default=entry.data[CONF_USERNAME]): USERNAME_SELECTOR,
+                vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
+            }
+        )
+        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
         """Start reauthentication after the stored session expired."""

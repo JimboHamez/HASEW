@@ -134,7 +134,9 @@ async def test_protocol_error_is_update_failed(
     fake_client.fetch_error = SewProtocolError("weird")
     await coordinator.async_refresh()
     assert not coordinator.last_update_success
-    assert "Unexpected portal response" in str(coordinator.last_exception)
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+    assert coordinator.last_exception.translation_key == "unexpected_response"
+    assert "weird" in str(coordinator.last_exception)
 
 
 async def test_default_interval_targets_poll_hour_with_jitter(

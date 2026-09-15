@@ -11,7 +11,7 @@
 [![Validate](https://github.com/JimboHamez/HASEW/actions/workflows/validate.yaml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/validate.yaml)
 [![hassfest](https://github.com/JimboHamez/HASEW/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/hassfest.yaml)
 [![Security](https://github.com/JimboHamez/HASEW/actions/workflows/security.yml/badge.svg)](https://github.com/JimboHamez/HASEW/actions/workflows/security.yml)
-[![Quality Scale: Silver](https://img.shields.io/badge/Quality%20Scale-Silver-C0C0C0?style=flat&logo=home-assistant&logoColor=white)](custom_components/sew_water/quality_scale.yaml)
+[![Quality Scale: Platinum](https://img.shields.io/badge/Quality%20Scale-Platinum-4E5D6C?style=flat&logo=home-assistant&logoColor=white)](custom_components/sew_water/quality_scale.yaml)
 
 Daily mains water usage from the [South East Water](https://my.southeastwater.com.au) customer portal, straight into Home Assistant.
 
@@ -42,7 +42,7 @@ This integration maps the portal's login, one-time code and usage requests to pl
 - **Standard re-authentication** — when the session does expire, Home Assistant's *Reauthentication required* card asks only for a new code.
 - **Late data handled** — the poll runs at 02:00 local time and re-imports the last 30 days, so readings the portal publishes late or corrects are filled in automatically. The first poll imports 90 days.
 - **Throttling-aware** — if the portal reports it is busy the poll retries after 15 minutes instead of waiting a day.
-- **Silver quality scale** — config flow, reauth and options flows, diagnostics with credentials redacted, and a test suite covering the client and the integration end to end (99 % coverage, ≥ 95 % enforced in CI).
+- **Platinum quality scale** — setup, re-authentication, reconfigure and options flows; repair issues; translated entity names, icons and error messages; diagnostics with credentials redacted; fully async and strictly typed; and a test suite covering the client and the integration end to end (99 % coverage, ≥ 95 % enforced in CI).
 
 Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.com/JimboHamez/HASEW/releases/tag/v2.0.0).
 
@@ -50,9 +50,13 @@ Full history in the [CHANGELOG](CHANGELOG.md) · [release notes](https://github.
 
 ## Prerequisites
 
-### 1. Portal account
+### 1. Portal account and a digital meter
 
-A working login for [my.southeastwater.com.au](https://my.southeastwater.com.au) on an account with a **digital meter** (usage appears on the portal's *Usage* page). During setup the portal will send a one-time code to the email address or mobile number on the account, so have that to hand.
+A working login for [my.southeastwater.com.au](https://my.southeastwater.com.au). During setup the portal will send a one-time code to the email address or mobile number on the account, so have that to hand.
+
+**Supported:** South East Water residential and business accounts with a **digital (smart) water meter** — the ones whose usage appears on the portal's *Usage* page as an hourly graph. One config entry covers one portal login; if the login has several billing accounts or meters, the first one the portal returns is used.
+
+**Not supported:** conventional (manually read) meters, which have no daily data in the portal; recycled-water meters (the author has none to test against); other Victorian retailers, including Yarra Valley Water, even though they run the same portal software.
 
 ### 2. Recorder
 
@@ -146,6 +150,10 @@ If the portal rejects the saved password, an extra **Update password** step appe
 
 > **Heads up:** the portal requires a one-time code for *every* new login and offers no "remember this device". The integration avoids that by keeping the session alive between polls, so re-authentication should be rare.
 
+### Reconfigure
+
+To change your portal password, or to force a fresh login without waiting for the session to expire: **Settings → Devices & Services → South East Water** → ⋮ → **Reconfigure**. Enter the credentials (the email is pre-filled and must stay the same — a different email is a different account, so add it as a new entry instead), choose where to send the code and enter it. The stored session and password are replaced in place; entities and history are untouched.
+
 ---
 
 ## How it works
@@ -174,7 +182,7 @@ All entities sit on one device, **South East Water**.
 |---|---|---|
 | `sensor.south_east_water_daily_usage` | L | Most recent published day's usage. Attributes: `reading_date`, `hourly_readings` (24 values). |
 | `sensor.south_east_water_total_usage` | L | Running total of every day imported (`total_increasing`). |
-| `sensor.south_east_water_last_reading_date` | date | Day the *Daily usage* value belongs to. |
+| `sensor.south_east_water_last_reading_date` | date | Day the *Daily usage* value belongs to. Diagnostic; **disabled by default** — enable it from the entity's settings if you want it on a card (the same date is the `reading_date` attribute of *Daily usage*). |
 
 Account identifiers (billing account, meter record ID, meter serial) are deliberately **not** exposed as entities — they identify your account and would otherwise be kept in the recorder. They live only in the config entry, are redacted from diagnostics, and are written once to the log at debug level on startup if you need to check them.
 
@@ -192,6 +200,96 @@ action: sew_water.import_from_date
 data:
   start_date: "2026-01-01"
 ```
+
+---
+
+## Use cases
+
+- **Water on the Energy dashboard** — the main reason this exists: daily water next to electricity and gas, with the dashboard's day/week/month/year views and cost tracking (set a $/L price on the water source).
+- **Leak and unusual-use alerts** — yesterday's total is a single number that is easy to compare against a threshold or a moving average; overnight hours in `hourly_readings` should be near zero on a healthy property.
+- **Consumption targets** — track a running total against a budget for the billing quarter using the `Total usage` sensor and a utility meter helper with a quarterly cycle.
+- **Long-term records** — the statistic is kept by the recorder for as long as your other long-term statistics, and `sew_water.import_from_date` can pull in everything since your digital meter was installed.
+
+## Automation examples
+
+**Alert when yesterday's usage was unusually high.** The sensor updates once a day after the 02:00 poll, so a state trigger fires at most once per day.
+
+```yaml
+alias: High water use yesterday
+triggers:
+  - trigger: numeric_state
+    entity_id: sensor.south_east_water_daily_usage
+    above: 1000
+actions:
+  - action: notify.notify
+    data:
+      title: High water use
+      message: >-
+        {{ states('sensor.south_east_water_daily_usage') }} L used on
+        {{ state_attr('sensor.south_east_water_daily_usage', 'reading_date') }}.
+```
+
+**Possible leak: water flowing every hour overnight.** A property with no leak normally shows several zero hours between midnight and 5 am.
+
+```yaml
+alias: Possible water leak
+triggers:
+  - trigger: state
+    entity_id: sensor.south_east_water_daily_usage
+    attribute: reading_date
+conditions:
+  - condition: template
+    value_template: >-
+      {% set hours = state_attr('sensor.south_east_water_daily_usage', 'hourly_readings') or [] %}
+      {{ hours | length == 24 and hours[0:5] | min > 0 }}
+actions:
+  - action: notify.notify
+    data:
+      title: Possible water leak
+      message: >-
+        Water was used in every hour between midnight and 5 am on
+        {{ state_attr('sensor.south_east_water_daily_usage', 'reading_date') }}.
+```
+
+**Quarterly water budget.** Create a [utility meter](https://www.home-assistant.io/integrations/utility_meter/) helper with source `sensor.south_east_water_total_usage` and a *quarterly* cycle; its value is the litres used so far this quarter and works as a gauge or a threshold for an automation.
+
+---
+
+## Known limitations
+
+- **Data is a day or more behind.** The portal publishes a day's readings during the following day, sometimes later, and occasionally revises them. The integration polls at 02:00 and re-imports the last 30 days so gaps and corrections are filled in, but you will never see today's usage, and yesterday's may be zero until the following poll.
+- **Daily resolution in statistics.** Statistics are one row per day (stamped at midnight local time). Hourly readings are available only as an attribute of the *Daily usage* sensor for the most recent published day.
+- **One-time code on every login.** The portal offers no "remember this device". Setup, re-authentication and reconfigure each need a code; the integration keeps the session alive between polls so this is rare, but it cannot be avoided when the portal ends the session.
+- **One login, one meter.** If a portal login has several billing accounts or meters, only the first one returned by the portal is used. Mains water only — recycled-water meters are not read.
+- **Backfill on first setup is 90 days.** Use `sew_water.import_from_date` for anything earlier.
+- **Sensor totals versus statistics.** The *Total usage* sensor changes once per poll, so its history attributes the whole day to the minute the poll ran. Use the statistic for the Energy dashboard.
+- **The portal is not an API.** The integration speaks the portal's own web protocol; a change on South East Water's side can stop it working until the integration is updated. The client is isolated in one module to keep such fixes small.
+
+---
+
+## Troubleshooting
+
+| Symptom | What it means | What to do |
+|---|---|---|
+| **Reauthentication required** card | The portal ended the stored session. | Click *Reconfigure* on the card and enter a new one-time code. Your saved credentials are re-used; only if the password was rejected will it ask for a new one. |
+| Setup shows *Could not reach the South East Water portal* | Home Assistant could not connect, or the portal returned a server error. | Check internet access from the HA host and whether [my.southeastwater.com.au](https://my.southeastwater.com.au) loads in a browser. The portal has maintenance windows. |
+| Setup shows *The code was not accepted* | Wrong or expired code. | Codes are six digits and short-lived. Request a new one by going back a step. |
+| Setup shows *The portal responded unexpectedly* | The portal's pages or responses did not match what the integration expects. | Enable debug logging (below), retry, and open an issue with the log excerpt. It usually means the portal changed. |
+| Repair issue *needs to be set up again* | A config entry from an earlier integration version was found; it holds no portal session and cannot be migrated. | Delete that entry and add the integration again. Existing statistics are kept. |
+| *Daily usage* is `unknown` or the last reading date is several days old | The portal has not published recent days yet, or is returning zeros for them. | Check the portal's *Usage* page for the same days. The next 02:00 poll re-imports the last 30 days automatically; `sew_water.force_import` does it now. |
+| Entities are *unavailable* | The last poll failed (portal down, busy or unreachable). | The coordinator logs the cause once and retries — after 15 minutes if the portal reported it was busy, otherwise at the next scheduled poll. Call `sew_water.force_import` to retry immediately. |
+| Energy dashboard shows a big spike on one day | The `Total usage` *sensor* was chosen as the water source instead of the statistic. | Change the water source to `sew_water:water_usage_mains`. |
+| History is missing before a certain date | Only 90 days are imported on first setup. | Call `sew_water.import_from_date` with the date you want to start from. |
+
+**Debug logging** — add to `configuration.yaml` and restart, or use *Settings → Devices & Services → South East Water → ⋮ → Enable debug logging*:
+
+```yaml
+logger:
+  logs:
+    custom_components.sew_water: debug
+```
+
+Debug output never includes your password, cookies or one-time codes. Account identifiers (billing account, meter record ID) appear once at startup so you can verify the right meter was picked. **Diagnostics** (⋮ → *Download diagnostics* on the entry) has the same redactions and is safe to attach to an issue.
 
 ---
 
@@ -213,7 +311,7 @@ Full list in [DESIGN_DOCUMENT.md → Open items](DESIGN_DOCUMENT.md#9-open-items
 | Python | 3.13 (as shipped with Home Assistant) |
 | Runtime dependencies | `aiohttp` (ships with Home Assistant) |
 | Utility | South East Water only (mains water) |
-| Quality scale | Silver (self-assessed against the [integration quality scale](https://developers.home-assistant.io/docs/core/integration-quality-scale); see [`quality_scale.yaml`](custom_components/sew_water/quality_scale.yaml)) |
+| Quality scale | Platinum (self-assessed against the [integration quality scale](https://developers.home-assistant.io/docs/core/integration-quality-scale); see [`quality_scale.yaml`](custom_components/sew_water/quality_scale.yaml)) |
 
 Credentials are stored in the config entry — Home Assistant's private `.storage`, the same place every integration keeps its secrets. They are never logged and are redacted from diagnostics. Because the portal demands a one-time code on every login, the stored password alone cannot open a new session; it only saves you retyping it during re-authentication.
 

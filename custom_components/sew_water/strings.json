@@ -47,6 +47,18 @@
         "data_description": {
           "password": "The password you now use for the portal."
         }
+      },
+      "reconfigure": {
+        "title": "Sign in again",
+        "description": "Enter your portal credentials to replace the stored session. The portal will send a new one-time code. The email address must be the one this entry was set up with.",
+        "data": {
+          "username": "Email address",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "The email address you sign in to my.southeastwater.com.au with.",
+          "password": "Your current portal password."
+        }
       }
     },
     "error": {
@@ -61,6 +73,7 @@
       "cannot_connect": "Could not reach the South East Water portal.",
       "invalid_auth": "The portal rejected the session before setup could finish.",
       "reauth_successful": "Signed in again successfully.",
+      "reconfigure_successful": "Signed in again; the new session is stored.",
       "unknown": "The portal responded unexpectedly. Check the logs for details.",
       "wrong_account": "The account you signed in to does not match this entry."
     }
@@ -116,11 +129,35 @@
     }
   },
   "exceptions": {
+    "cannot_connect": {
+      "message": "Cannot reach the South East Water portal: {error}"
+    },
+    "import_failed": {
+      "message": "Import failed: {error}"
+    },
     "no_entries": {
       "message": "South East Water is not set up."
     },
+    "portal_busy": {
+      "message": "The South East Water portal is busy and the poll will be retried shortly: {error}"
+    },
+    "session_expired": {
+      "message": "The portal session has expired; a new one-time code is required."
+    },
+    "session_rejected": {
+      "message": "The portal rejected the stored session: {error}"
+    },
     "start_in_future": {
       "message": "The start date must be before today."
+    },
+    "unexpected_response": {
+      "message": "Unexpected response from the South East Water portal: {error}"
+    }
+  },
+  "issues": {
+    "v1_entry": {
+      "title": "South East Water entry “{title}” needs to be set up again",
+      "description": "This entry was created by an earlier version of the integration and holds no portal session, so it cannot be migrated. Delete it under Settings → Devices & services → South East Water, then add the integration again and sign in with a one-time code. Your existing water statistics are kept."
     }
   }
 }

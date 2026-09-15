@@ -1,0 +1,23 @@
+{
+  "entity": {
+    "sensor": {
+      "daily_usage": {
+        "default": "mdi:water"
+      },
+      "last_reading_date": {
+        "default": "mdi:calendar-check"
+      },
+      "total_usage": {
+        "default": "mdi:water-plus"
+      }
+    }
+  },
+  "services": {
+    "force_import": {
+      "service": "mdi:cloud-download"
+    },
+    "import_from_date": {
+      "service": "mdi:calendar-import"
+    }
+  }
+}

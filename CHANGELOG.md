@@ -6,12 +6,24 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Integration quality scale declared as **Silver** (`quality_scale.yaml`, `manifest.json`).
+- Integration quality scale declared as **Platinum** (`quality_scale.yaml`, `manifest.json`); every
+  Bronze–Platinum rule is recorded as done or exempt with a reason.
+- **Reconfigure** flow: change the portal password or force a fresh login from the entry's menu
+  without deleting it.
+- Repair issue for version 1 config entries explaining that they must be removed and re-added.
+- Translated icons (`icons.json`) for the sensors and services, and translated messages for every
+  error the coordinator and services raise.
+- README sections on supported meters, use cases, automation examples, known limitations and
+  troubleshooting.
 - Integration-level test suite (`tests/ha/`, `pytest-homeassistant-custom-component`) covering the
   config flow, setup/unload, services, coordinator, sensors and diagnostics. Coverage is 99 % and
   CI fails below 95 %.
 - `data_description` help text on every setup, reauth and options field.
 - `PARALLEL_UPDATES` declared on the sensor platform.
+
+### Changed
+- *Last reading date* is now a diagnostic entity and disabled by default; the same date remains the
+  `reading_date` attribute of *Daily usage*.
 
 ### Fixed
 - Running total could omit the first day of a re-imported window: the lookup for the last statistic

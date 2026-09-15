@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from homeassistant.const import ATTR_ATTRIBUTION, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import ATTR_ATTRIBUTION, STATE_UNAVAILABLE, STATE_UNKNOWN, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.sew_water.const import ATTRIBUTION, DOMAIN, MANUFACTURER, SERVICE_FORCE_IMPORT
@@ -20,6 +21,7 @@ TOTAL = "sensor.south_east_water_total_usage"
 LAST_DATE = "sensor.south_east_water_last_reading_date"
 
 
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
 async def test_entities_are_created_on_one_device(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
@@ -62,6 +64,21 @@ async def test_total_usage_is_cumulative(hass: HomeAssistant, setup_integration:
     assert state.attributes["state_class"] == "total_increasing"
 
 
+async def test_last_reading_date_is_diagnostic_and_disabled_by_default(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, entity_registry: er.EntityRegistry
+) -> None:
+    entry = entity_registry.async_get(LAST_DATE)
+    assert entry is not None
+    assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert entry.entity_category is EntityCategory.DIAGNOSTIC
+    assert hass.states.get(LAST_DATE) is None
+    # The two headline sensors stay enabled.
+    for entity_id in (DAILY, TOTAL):
+        enabled = entity_registry.async_get(entity_id)
+        assert enabled is not None and enabled.disabled_by is None
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
 async def test_last_reading_date(hass: HomeAssistant, setup_integration: MockConfigEntry) -> None:
     yesterday = dt_util.now().date() - timedelta(days=1)
     state = hass.states.get(LAST_DATE)
@@ -70,6 +87,7 @@ async def test_last_reading_date(hass: HomeAssistant, setup_integration: MockCon
     assert state.attributes["device_class"] == "date"
 
 
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
 async def test_skips_days_without_readings(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, fake_client: FakeClient
 ) -> None:
@@ -87,6 +105,7 @@ async def test_skips_days_without_readings(
     assert last_date.state == (yesterday - timedelta(days=1)).isoformat()
 
 
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
 async def test_unknown_when_no_day_has_data(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, fake_client: FakeClient
 ) -> None:
@@ -103,6 +122,7 @@ async def test_unknown_when_no_day_has_data(
     assert last_date.state == STATE_UNKNOWN
 
 
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
 async def test_entities_unavailable_after_failed_poll(
     hass: HomeAssistant, setup_integration: MockConfigEntry, fake_client: FakeClient
 ) -> None:

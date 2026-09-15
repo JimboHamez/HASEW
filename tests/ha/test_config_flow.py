@@ -285,6 +285,71 @@ async def test_reauth_with_different_account_aborts(
     assert result["reason"] == "wrong_account"
 
 
+# ------------------------------------------------------------------------ reconfigure
+
+
+async def start_reconfigure(hass: HomeAssistant, entry: MockConfigEntry) -> dict[str, Any]:
+    """Open the reconfigure flow for a loaded entry and return its first form."""
+    entry.add_to_hass(hass)
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    return dict(result)
+
+
+async def test_reconfigure_replaces_session_with_new_password(
+    hass: HomeAssistant, fake_client: FakeClient, mock_config_entry: MockConfigEntry
+) -> None:
+    fake_client.exported_cookies = [{"name": "sid", "value": "NEW", "domain": "my.southeastwater.com.au", "path": "/"}]
+    result = await start_reconfigure(hass, mock_config_entry)
+    # The form is pre-filled with the stored email address.
+    schema = result["data_schema"]
+    assert schema is not None
+    assert next(k for k in schema.schema if k == CONF_USERNAME).default() == USERNAME
+
+    result = await submit(hass, result["flow_id"], {CONF_USERNAME: f" {USERNAME} ", CONF_PASSWORD: "new-secret"})
+    assert result["step_id"] == "mfa_channel"
+    result = await submit(hass, result["flow_id"], {CONF_MFA_CHANNEL: "sms"})
+    assert result["step_id"] == "mfa_code"
+    result = await submit(hass, result["flow_id"], {CONF_MFA_CODE: "111222"})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+
+    assert ("login", (USERNAME, "new-secret")) in fake_client.calls
+    assert mock_config_entry.data[CONF_PASSWORD] == "new-secret"
+    assert mock_config_entry.data[CONF_COOKIES][0]["value"] == "NEW"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_reconfigure_login_error_is_recoverable(
+    hass: HomeAssistant, fake_client: FakeClient, mock_config_entry: MockConfigEntry
+) -> None:
+    fake_client.login_error = SewAuthError("nope")
+    result = await start_reconfigure(hass, mock_config_entry)
+    result = await submit(hass, result["flow_id"], {CONF_USERNAME: USERNAME, CONF_PASSWORD: "wrong"})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {"base": "invalid_auth"}
+
+    fake_client.login_error = None
+    fake_client.login_result = LoginResult(mfa_required=False, channels=())
+    result = await submit(hass, result["flow_id"], {CONF_USERNAME: USERNAME, CONF_PASSWORD: PASSWORD})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+
+
+async def test_reconfigure_with_different_account_aborts(
+    hass: HomeAssistant, fake_client: FakeClient, mock_config_entry: MockConfigEntry
+) -> None:
+    fake_client.login_result = LoginResult(mfa_required=False, channels=())
+    result = await start_reconfigure(hass, mock_config_entry)
+    result = await submit(hass, result["flow_id"], {CONF_USERNAME: "someone@else.example", CONF_PASSWORD: PASSWORD})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "wrong_account"
+    assert mock_config_entry.data[CONF_USERNAME] == USERNAME
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
 # ---------------------------------------------------------------------------- options
 
 

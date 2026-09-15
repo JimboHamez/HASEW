@@ -13,7 +13,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfVolume
+from homeassistant.const import EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -63,6 +63,9 @@ SENSORS: tuple[SewSensorDescription, ...] = (
         key="last_reading_date",
         translation_key="last_reading_date",
         device_class=SensorDeviceClass.DATE,
+        # The same date is an attribute of the daily sensor; this is for people who want it on a card.
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         value_fn=lambda data: data.latest.day if data.latest else None,
     ),
 )
